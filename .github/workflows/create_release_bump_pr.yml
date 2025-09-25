@@ -81,42 +81,22 @@ jobs:
         # git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
         git checkout -b bump-lightning-catalyst-test 
         git branch
-        git config --global user.name "runora95"
-        git config --global user.email "runor.agbaire@xanadu.ai"
-        pennylane_version="v0.45" #${branch_name//sc/}"  # TESTING Remove the leading 'v' from the branch name
+        git config user.name "GitHub Actions Bot"
+        git config user.email "<>"
 
         lightning_version=$(python3 -m pip index versions pennylane-lightning 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
         catalyst_version=$(python3 -m pip index versions pennylane-catalyst 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
 
-        echo "${catalyst_version}"
+        echo "catalyst version: ${catalyst_version}"
+        echo "lightning version: ${lightning_version}"
 
         # Extract major and minor version numbers from lightning_version
         lightning_major_minor=$(echo "${lightning_version}" | grep -oE '^[0-9]+\.[0-9]+')
-        echo "Lightning major.minor version: ${lightning_major_minor}"
-        
-        echo "=== HEAD version of dependency line(s) ==="
-        git show HEAD:pyproject.toml | grep -n 'pennylane-lightning>=' || true
-        git show HEAD:pennylane/compiler/compiler.py | grep -n 'PL_CATALYST_MIN_VERSION =' || true
-        echo "=== Worktree before sed ==="
-        grep -n 'pennylane-lightning>=' pyproject.toml || true
-        sha1_before=$(sha1sum pyproject.toml | cut -d' ' -f1)
+
         sed -i -E "s/pennylane-lightning>=[0-9.]*/pennylane-lightning>=${lightning_major_minor}/" "pyproject.toml" # Update pyproject.toml
-        
-        echo "toml changes"
-        # Replace '+' with '*' which is supported in basic regex
-        grep -n 'PL_CATALYST_MIN_VERSION =' pennylane/compiler/compiler.py || true
         sed -i -E "s/PL_CATALYST_MIN_VERSION = Version\(\"[0-9.]*\"\)/PL_CATALYST_MIN_VERSION = Version(\"${catalyst_version}\")/" "pennylane/compiler/compiler.py" # * updates the versions for PennyLane-Lightning and PennyLane-Catalyst in .github/stable/external.txt.
 
-        grep -n 'PL_CATALYST_MIN_VERSION =' pennylane/compiler/compiler.py || true
-        sha1_after=$(sha1sum pyproject.toml | cut -d' ' -f1)
-        echo "SHA before: $sha1_before  after: $sha1_after"
-        git diff --name-only
-        git diff | sed -n '1,120p'  
-
         echo "Pushing changes and creating PR..."
-        git status
-        echo "compiler changes"
-        cat pennylane/compiler/compiler.py | grep "PL_CATALYST_MIN_VERSION ="     
         if ! git diff --quiet pyproject.toml pennylane/compiler/compiler.py; then
           git add pyproject.toml pennylane/compiler/compiler.py
           git commit -m "[no ci] Bump minimum Lightning and Catalyst versions to ${lightning_version} and ${catalyst_version}"
