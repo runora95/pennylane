@@ -123,5 +123,5 @@ jobs:
         else
           echo "No effective version changes."
         fi        
-        # git push origin bump-lightning-catalyst-test
-        # gh pr create --fill --label "do not merge" --base test-bump
+        git push origin bump-lightning-catalyst-test
+        gh pr create --label "do not merge" --base test-bump --title "Bump minimum Lightning and Catalyst versions" --body "Bump minimum Lightning and Catalyst versions"
