@@ -104,14 +104,14 @@ jobs:
         
         echo "toml changes"
         # Replace '+' with '*' which is supported in basic regex
-        cat pennylane/compiler/compiler.py | grep "PL_CATALYST_MIN_VERSION"
-        sed -i -E "s/PL_CATALYST_MIN_VERSION = Version(\"[0-9.]*\")/PL_CATALYST_MIN_VERSION = Version(\"${catalyst_version}\")/" "pennylane/compiler/compiler.py" # * updates the versions for PennyLane-Lightning and PennyLane-Catalyst in .github/stable/external.txt.
+        grep -n 'PL_CATALYST_MIN_VERSION =' pennylane/compiler/compiler.py || true
+        sed -i -E "s/PL_CATALYST_MIN_VERSION = Version\(\"[0-9.]*\"\)/PL_CATALYST_MIN_VERSION = Version(\"${catalyst_version}\")/" "pennylane/compiler/compiler.py" # * updates the versions for PennyLane-Lightning and PennyLane-Catalyst in .github/stable/external.txt.
 
         grep -n 'PL_CATALYST_MIN_VERSION =' pennylane/compiler/compiler.py || true
         sha1_after=$(sha1sum pyproject.toml | cut -d' ' -f1)
         echo "SHA before: $sha1_before  after: $sha1_after"
         git diff --name-only
-        git diff pyproject.toml | sed -n '1,120p'  
+        git diff | sed -n '1,120p'  
 
         echo "Pushing changes and creating PR..."
         git status
