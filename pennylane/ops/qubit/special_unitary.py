@@ -18,13 +18,13 @@ its utility functions.
 # pylint: disable=arguments-differ, import-outside-toplevel
 from functools import lru_cache, reduce
 from itertools import product
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 
 import pennylane as qml
 from pennylane.decomposition import add_decomps, register_resources
-from pennylane.operation import AnyWires, FlatPytree, Operation
+from pennylane.operation import FlatPytree, Operation
 from pennylane.ops.qubit.parametric_ops_multi_qubit import PauliRot
 from pennylane.typing import TensorLike
 from pennylane.wires import WiresLike
@@ -232,7 +232,7 @@ class SpecialUnitary(Operation):
     .. seealso::
 
         For more details on using this operator in applications, see the
-        :doc:`SU(N) gate demo <demos/tutorial_here_comes_the_sun>`.
+        `SU(N) gate demo <demos/tutorial_here_comes_the_sun>`__.
 
     .. warning::
 
@@ -401,9 +401,6 @@ class SpecialUnitary(Operation):
 
     """
 
-    num_wires = AnyWires
-    """int: Number of wires that the operator acts on."""
-
     num_params = 1
     """int: Number of trainable parameters that the operator depends on."""
 
@@ -413,7 +410,7 @@ class SpecialUnitary(Operation):
     grad_method = None
     """Gradient computation method."""
 
-    def __init__(self, theta: TensorLike, wires: WiresLike, id: Optional[str] = None):
+    def __init__(self, theta: TensorLike, wires: WiresLike, id: str | None = None):
         num_wires = 1 if isinstance(wires, int) else len(wires)
         self.hyperparameters["num_wires"] = num_wires
         theta_shape = qml.math.shape(theta)
@@ -487,7 +484,11 @@ class SpecialUnitary(Operation):
             matrices = product(_pauli_matrices, repeat=num_wires)
             # Drop the identity from the generator of matrices
             _ = next(matrices)
-            A = sum(t * reduce(np.kron, letters) for t, letters in zip(theta, matrices))
+            A = sum(
+                t
+                * qml.math.asarray(reduce(qml.math.kron, pauli_ops), like=qml.math.get_interface(t))
+                for t, pauli_ops in zip(theta, matrices)
+            )
         else:
             A = qml.math.tensordot(theta, pauli_basis_matrices(num_wires), axes=[[-1], [0]])
         if interface == "jax" and qml.math.ndim(theta) > 1:
@@ -574,7 +575,10 @@ class SpecialUnitary(Operation):
             rjac, ijac = torch.autograd.functional.jacobian(split_matrix, theta)
             jac = rjac + 1j * ijac
 
-        elif interface in ("tensorflow", "tf"):
+        elif interface in (
+            "tensorflow",
+            "tf",
+        ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
             import tensorflow as tf
 
             with tf.GradientTape(persistent=True) as tape:

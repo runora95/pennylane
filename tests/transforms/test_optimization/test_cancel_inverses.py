@@ -133,6 +133,20 @@ class TestCancelInverses:
         wires_expected = [Wires(0), Wires(1), Wires([0, 1]), Wires(2), Wires(1)]
         compare_operation_lists(ops, names_expected, wires_expected)
 
+    def test_diff_ops_adj_no_cancelled(self):
+        """Test that different operations do not cancel."""
+
+        def qfunc():
+            qml.RX(0.1, wires=0)
+            qml.adjoint(qml.RX)(0.2, wires=0)
+
+        transformed_qfunc = cancel_inverses(qfunc)
+        ops = qml.tape.make_qscript(transformed_qfunc)().operations
+
+        names_expected = ["RX", "Adjoint(RX)"]
+        wires_expected = [Wires(0), Wires(0)]
+        compare_operation_lists(ops, names_expected, wires_expected)
+
     def test_three_qubits_toffolis(self):
         """Test that Toffolis on different permutations of wires cancel correctly."""
 
@@ -330,6 +344,43 @@ class TestCancelInversesInterfaces:
         tape = qml.workflow.construct_tape(transformed_qnode)(input)
         ops = tape.operations
         compare_operation_lists(ops, expected_op_list, expected_wires_list)
+
+    @pytest.mark.jax
+    def test_cancel_inverses_abstract_params(self):
+        """Test that the transform does not fail with abstract parameters."""
+        import jax
+
+        @jax.jit
+        @cancel_inverses
+        @qml.qnode(dev)
+        def circuit(x):
+            qml.adjoint(qml.RX(x + 0.0, 0))
+            qml.RX(x, 0)
+            return qml.expval(qml.Z(0))
+
+        res = circuit(jax.numpy.array(0))
+        qml.math.allclose(res, 1.0)
+
+    @pytest.mark.jax
+    def test_cancel_inverses_abstract_wires(self):
+        """Tests that inverses do not cancel across operators with abstract wires."""
+
+        import jax
+
+        @jax.jit
+        def f(w):
+            tape = qml.tape.QuantumScript([qml.H(0), qml.CNOT([w, 1]), qml.H(0)])
+            [tape], _ = cancel_inverses(tape)
+            return len(tape.operations)
+
+        @jax.jit
+        def f2(w):
+            tape = qml.tape.QuantumScript([qml.X(0), qml.X(0), qml.CNOT([w, 1])])
+            [tape], _ = cancel_inverses(tape)
+            return len(tape.operations)
+
+        assert f(0) == 3
+        assert f2(0) == 1
 
 
 ### Tape
