@@ -15,13 +15,14 @@
 This file contains functions to create spin Hamiltonians.
 """
 
-import pennylane as qml
-from pennylane import I, X, Y, Z, math
+from pennylane import math, qchem
 from pennylane.fermi import FermiWord
+from pennylane.ops import X, Y, Z
+from pennylane.ops.identity import I
 
 from .lattice import Lattice, generate_lattice
 
-# pylint: disable=too-many-arguments, too-many-branches
+# pylint: disable=too-many-arguments
 
 
 def transverse_ising(
@@ -82,7 +83,7 @@ def transverse_ising(
         coupling = [coupling]
     coupling = math.asarray(coupling)
 
-    hamiltonian = 0.0 * qml.I(0)
+    hamiltonian = 0.0 * I(0)
 
     if coupling.shape not in [(neighbour_order,), (lattice.n_sites, lattice.n_sites)]:
         raise ValueError(
@@ -168,7 +169,7 @@ def heisenberg(lattice, n_cells, coupling=None, boundary_condition=False, neighb
             f"The coupling parameter shape should be equal to ({neighbour_order},3) or (3,{lattice.n_sites},{lattice.n_sites})"
         )
 
-    hamiltonian = 0.0 * qml.I(0)
+    hamiltonian = 0.0 * I(0)
     if coupling.shape == (neighbour_order, 3):
         for edge in lattice.edges:
             i, j, order = edge
@@ -307,12 +308,13 @@ def fermi_hubbard(
 
     hamiltonian = hopping_ham + int_term
 
+    mapping = mapping.strip().lower()
     if mapping not in ["jordan_wigner", "parity", "bravyi_kitaev"]:
         raise ValueError(
             f"The '{mapping}' transformation is not available."
             f"Please set mapping to 'jordan_wigner', 'parity', or 'bravyi_kitaev'"
         )
-    qubit_ham = qml.qchem.qubit_observable(hamiltonian, mapping=mapping)
+    qubit_ham = qchem.qubit_observable(hamiltonian, mapping=mapping)
 
     return qubit_ham.simplify()
 
@@ -472,12 +474,13 @@ def emery(
 
     hamiltonian = hopping_term + coulomb_term + intersite_term
 
+    mapping = mapping.strip().lower()
     if mapping not in ["jordan_wigner", "parity", "bravyi_kitaev"]:
         raise ValueError(
             f"The '{mapping}' transformation is not available."
             f"Please set mapping to 'jordan_wigner', 'parity', or 'bravyi_kitaev'."
         )
-    qubit_ham = qml.qchem.qubit_observable(hamiltonian, mapping=mapping)
+    qubit_ham = qchem.qubit_observable(hamiltonian, mapping=mapping)
 
     return qubit_ham.simplify()
 
@@ -613,12 +616,13 @@ def haldane(
                     math.exp(-1j * phi_term) * FermiWord({(0, s2): "+", (1, s1): "-"})
                 )
 
+    mapping = mapping.strip().lower()
     if mapping not in ["jordan_wigner", "parity", "bravyi_kitaev"]:
         raise ValueError(
             f"The '{mapping}' transformation is not available."
             f"Please set mapping to 'jordan_wigner', 'parity', or 'bravyi_kitaev'."
         )
-    qubit_ham = qml.qchem.qubit_observable(hamiltonian, mapping=mapping)
+    qubit_ham = qchem.qubit_observable(hamiltonian, mapping=mapping)
 
     return qubit_ham.simplify()
 
@@ -698,7 +702,7 @@ def kitaev(n_cells, coupling=None, boundary_condition=False):
         custom_edges=custom_edges,
     )
     opmap = {"X": X, "Y": Y, "Z": Z}
-    hamiltonian = 0.0 * qml.I(0)
+    hamiltonian = 0.0 * I(0)
     for edge in lattice.edges:
         v1, v2 = edge[0:2]
         op1, op2 = edge[2][0]
@@ -722,29 +726,27 @@ def spin_hamiltonian(lattice):
 
     **Example**
 
-    .. code-block:: python
-
-        >>> lattice = qml.spin.Lattice(
-        ...     n_cells=[2, 2],
-        ...     vectors=[[1, 0], [0, 1]],
-        ...     positions=[[0, 0], [1, 5]],
-        ...     boundary_condition=False,
-        ...     custom_edges=[[(0, 1), ("XX", 0.5)], [(1, 2), ("YY", 0.6)], [(1, 4), ("ZZ", 0.7)]],
-        ...     custom_nodes=[[0, ("X", 0.5)], [1, ("Y", 0.3)]],
-        ... )
-        >>> qml.spin.spin_hamiltonian(lattice=lattice)
-        (
-            0.5 * (X(0) @ X(1))
-          + 0.5 * (X(2) @ X(3))
-          + 0.5 * (X(4) @ X(5))
-          + 0.5 * (X(6) @ X(7))
-          + 0.6 * (Y(1) @ Y(2))
-          + 0.6 * (Y(5) @ Y(6))
-          + 0.7 * (Z(1) @ Z(4))
-          + 0.7 * (Z(3) @ Z(6))
-          + 0.5 * X(0)
-          + 0.3 * Y(1)
-        )
+    >>> lattice = qml.spin.Lattice(
+    ...     n_cells=[2, 2],
+    ...     vectors=[[1, 0], [0, 1]],
+    ...     positions=[[0, 0], [1, 5]],
+    ...     boundary_condition=False,
+    ...     custom_edges=[[(0, 1), ("XX", 0.5)], [(1, 2), ("YY", 0.6)], [(1, 4), ("ZZ", 0.7)]],
+    ...     custom_nodes=[[0, ("X", 0.5)], [1, ("Y", 0.3)]],
+    ... )
+    >>> qml.spin.spin_hamiltonian(lattice=lattice)
+    (
+        0.5 * (X(0) @ X(1))
+        + 0.5 * (X(2) @ X(3))
+        + 0.5 * (X(4) @ X(5))
+        + 0.5 * (X(6) @ X(7))
+        + 0.6 * (Y(1) @ Y(2))
+        + 0.6 * (Y(5) @ Y(6))
+        + 0.7 * (Z(1) @ Z(4))
+        + 0.7 * (Z(3) @ Z(6))
+        + 0.5 * X(0)
+        + 0.3 * Y(1)
+    )
 
     """
     if not isinstance(lattice.edges[0][2], tuple):
@@ -753,7 +755,7 @@ def spin_hamiltonian(lattice):
         )
 
     opmap = {"I": I, "X": X, "Y": Y, "Z": Z}
-    hamiltonian = 0.0 * qml.I(0)
+    hamiltonian = 0.0 * I(0)
     for edge in lattice.edges:
         v1, v2 = edge[0:2]
         op1, op2 = edge[2][0]

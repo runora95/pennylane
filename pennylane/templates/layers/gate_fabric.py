@@ -14,11 +14,13 @@
 r"""
 Contains the quantum-number-preserving GateFabric template.
 """
-# pylint: disable-msg=too-many-branches,too-many-arguments,protected-access
+# pylint: disable=too-many-arguments
 import numpy as np
 
-import pennylane as qml
-from pennylane.operation import AnyWires, Operation
+from pennylane import math
+from pennylane.operation import Operation
+from pennylane.ops import DoubleExcitation, OrbitalRotation
+from pennylane.templates.embeddings import BasisEmbedding
 
 
 class GateFabric(Operation):
@@ -172,7 +174,6 @@ class GateFabric(Operation):
 
     """
 
-    num_wires = AnyWires
     grad_method = None
 
     def __init__(self, weights, wires, init_state, include_pi=False, id=None):
@@ -185,7 +186,7 @@ class GateFabric(Operation):
                 f"This template requires an even number of qubits; got {len(wires)} wires"
             )
 
-        shape = qml.math.shape(weights)
+        shape = math.shape(weights)
 
         if len(shape) != 3:
             raise ValueError(f"Weights tensor must be 3-dimensional; got shape {shape}")
@@ -246,7 +247,7 @@ class GateFabric(Operation):
         OrbitalRotation(tensor(1.), wires=['a', 'b', 'c', 'd'])]
         """
         op_list = []
-        n_layers = qml.math.shape(weights)[0]
+        n_layers = math.shape(weights)[0]
         wire_pattern = [
             wires[i : i + 4] for i in range(0, len(wires), 4) if len(wires[i : i + 4]) == 4
         ]
@@ -255,15 +256,15 @@ class GateFabric(Operation):
                 wires[i : i + 4] for i in range(2, len(wires), 4) if len(wires[i : i + 4]) == 4
             ]
 
-        op_list.append(qml.BasisEmbedding(init_state, wires=wires))
+        op_list.append(BasisEmbedding(init_state, wires=wires))
 
         for layer in range(n_layers):
             for idx, wires_ in enumerate(wire_pattern):
                 if include_pi:
-                    op_list.append(qml.OrbitalRotation(np.pi, wires=wires_))
+                    op_list.append(OrbitalRotation(np.pi, wires=wires_))
 
-                op_list.append(qml.DoubleExcitation(weights[layer][idx][0], wires=wires_))
-                op_list.append(qml.OrbitalRotation(weights[layer][idx][1], wires=wires_))
+                op_list.append(DoubleExcitation(weights[layer][idx][0], wires=wires_))
+                op_list.append(OrbitalRotation(weights[layer][idx][1], wires=wires_))
 
         return op_list
 

@@ -12,11 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Contains a function to extract a single tape from a QNode"""
+from __future__ import annotations
 
-import pennylane as qml
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+from .construct_batch import construct_batch
+
+if TYPE_CHECKING:
+    from pennylane.tape import QuantumScript
+
+    from .qnode import QNode
 
 
-def construct_tape(qnode, level="user"):
+def construct_tape(
+    qnode: QNode, level: str | int | slice | None = "user"
+) -> Callable[..., QuantumScript]:
     """Constructs the tape for a designated stage in the transform program.
 
     Args:
@@ -42,7 +53,8 @@ def construct_tape(qnode, level="user"):
 
     .. code-block:: python
 
-        @qml.qnode(qml.device("default.qubit", shots=10))
+        @partial(qml.set_shots, shots=10)
+        @qml.qnode(qml.device("default.qubit"))
         def circuit(x):
             qml.RandomLayers(qml.numpy.array([[1.0, 2.0]]), wires=(0,1))
             qml.RX(x, wires=0)
@@ -66,7 +78,7 @@ def construct_tape(qnode, level="user"):
 
     def wrapper(*args, **kwargs):
 
-        batch, _ = qml.workflow.construct_batch(qnode, level)(*args, **kwargs)
+        batch, _ = construct_batch(qnode, level)(*args, **kwargs)
 
         if len(batch) > 1:
             raise ValueError(
