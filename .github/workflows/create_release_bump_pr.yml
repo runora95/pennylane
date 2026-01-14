@@ -1,0 +1,107 @@
+name: Create PennyLane PR to bump RC versions
+
+on:
+  push:
+  # schedule:
+  #   # Run every weekday at 5:50 EDT (cron is in UTC)
+  #   - cron: "50 9 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  release_bump_pr:
+    name: Setup the release
+    runs-on: ubuntu-latest
+    # env:
+    #   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - name: Checkout PennyLane repo
+      uses: actions/checkout@v4
+      with:
+        ref: test-bump
+
+    # Sets up Python environment
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        
+    # Ensure setuptools is up-to-date for pyproject.toml processing
+    - name: Install latest setuptools 
+      run: |
+        python -m pip install --upgrade pip
+        pip install --upgrade setuptools        
+
+    - name: Check for rc branch
+      run: |
+        VERSION=$(python setup.py --version)
+        IFS=. read MAJ MIN PAT <<< "${VERSION%-dev[0-9]*}"
+        RC_BRANCH="v${MAJ}.$((MIN-1)).${PAT}-rc0"
+        if git ls-remote --exit-code origin "refs/heads/$RC_BRANCH"; then
+          echo "branch_exists=true" >> $GITHUB_ENV
+          echo "rc_branch=$RC_BRANCH" >> $GITHUB_ENV
+        else
+          echo "branch_exists=false" >> $GITHUB_ENV
+        fi
+
+    - name: Configure git user
+      run: |
+        git config --global user.name "runora95"
+        git config --global user.email "runor.agbaire@xanadu.ai"
+
+    # - name: Checkout PennyLane repo
+    #   # if: ${{ env.branch_exists == 'true' }}
+    #   uses: actions/checkout@v4
+      # with:
+      # #   # ssh-key: ${{ secrets.NIGHTLY_VERSION_UPDATE_DEPLOY_KEY }}
+      #   ref: sc-98284-rc-test #${{ env.rc_branch }}
+
+    - name: Check for Catalyst and Lightning release
+      # if: ${{ env.branch_exists == 'true' }}
+      id: check_releases
+      run: |
+        RELEASE_DATE_ISO=$(curl -s "https://pypi.org/pypi/pennylane-catalyst/json" | jq -r '.info.version as $v | .releases[$v][0].upload_time_iso_8601' || true)
+        echo "Latest release was on: ${RELEASE_DATE_ISO}"
+        RELEASE_DATE_SECONDS=$(date -d "${RELEASE_DATE_ISO}" +%s)
+        ONE_WEEK_AGO_SECONDS=$(date -d "7 days ago" +%s)
+        if [ "$RELEASE_DATE_SECONDS" -gt "$ONE_WEEK_AGO_SECONDS" ]; then
+          echo "✅ Yes, this package was released within the last 7 days."
+          echo catalyst_release=true >> $GITHUB_ENV
+          exit 0
+        else
+          echo "❌ No, this package is older than 7 days."
+          echo catalyst_release=false >> $GITHUB_ENV
+          exit 0 # Exit with a failure code for scripting purposes
+        fi
+
+    - name: Create PR to bump Catalyst and Lightning versions
+      env:
+        HEAD_BRANCH_NAME: ${{ inputs.pull_request_head_branch_name }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
+      run: |
+        # git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+        git checkout -b bump-lightning-catalyst-test 
+        git branch
+        git config user.name "GitHub Actions Bot"
+        git config user.email "<>"
+
+        lightning_version=$(python3 -m pip index versions pennylane-lightning 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+        catalyst_version=$(python3 -m pip index versions pennylane-catalyst 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+
+        echo "catalyst version: ${catalyst_version}"
+        echo "lightning version: ${lightning_version}"
+
+        # Extract major and minor version numbers from lightning_version
+        lightning_major_minor=$(echo "${lightning_version}" | grep -oE '^[0-9]+\.[0-9]+')
+
+        sed -i -E "s/pennylane-lightning>=[0-9.]*/pennylane-lightning>=${lightning_major_minor}/" "pyproject.toml" # Update pyproject.toml
+        sed -i -E "s/PL_CATALYST_MIN_VERSION = Version\(\"[0-9.]*\"\)/PL_CATALYST_MIN_VERSION = Version(\"${catalyst_version}\")/" "pennylane/compiler/compiler.py" # * updates the versions for PennyLane-Lightning and PennyLane-Catalyst in .github/stable/external.txt.
+
+        echo "Pushing changes and creating PR..."
+        if ! git diff --quiet pyproject.toml pennylane/compiler/compiler.py; then
+          git add pyproject.toml pennylane/compiler/compiler.py
+          git commit -m "[no ci] Bump minimum Lightning and Catalyst versions to ${lightning_version} and ${catalyst_version}"
+        else
+          echo "No effective version changes."
+        fi        
+        git push origin bump-lightning-catalyst-test
+        gh pr create --label "do not merge" --base test-bump --title "Bump minimum Lightning and Catalyst versions" --body "Bump minimum Lightning and Catalyst versions"
