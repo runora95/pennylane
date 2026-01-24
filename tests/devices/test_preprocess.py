@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Unit tests for preprocess in devices/qubit."""
+
 import warnings
-from functools import partial
 
 import numpy as np
 import pytest
@@ -25,7 +25,6 @@ from pennylane.devices.preprocess import (
     device_resolve_dynamic_wires,
     measurements_from_counts,
     measurements_from_samples,
-    mid_circuit_measurements,
     no_analytic,
     no_sampling,
     null_postprocessing,
@@ -576,14 +575,14 @@ class TestDecomposeTransformations:
             found_correct_call = False
             for call in spy.call_args_list:
                 call_kwargs = call[1]  # Get keyword arguments
-                if "max_work_wires" in call_kwargs:
-                    if call_kwargs["max_work_wires"] == expected_work_wires:
+                if "num_work_wires" in call_kwargs:
+                    if call_kwargs["num_work_wires"] == expected_work_wires:
                         found_correct_call = True
                         break
 
             assert (
                 found_correct_call
-            ), f"Expected max_work_wires={expected_work_wires} not found in calls"
+            ), f"Expected num_work_wires={expected_work_wires} not found in calls"
 
 
 class TestGraphModeExclusiveFeatures:
@@ -620,73 +619,23 @@ class TestGraphModeExclusiveFeatures:
         def decomp_with_work_wire(wires):
             qml.X(wires)
 
-        qml.add_decomps(MyOp, decomp_fallback, decomp_with_work_wire)
+        with qml.decomposition.local_decomps():
+            qml.add_decomps(MyOp, decomp_fallback, decomp_with_work_wire)
 
-        tape = qml.tape.QuantumScript([MyOp(0)])
-        device_wires = qml.wires.Wires(1)  # Only 1 wire, insufficient for 5 burnable
-        target_gates = {"Hadamard", "PauliX"}
+            tape = qml.tape.QuantumScript([MyOp(0)])
+            device_wires = qml.wires.Wires(1)  # Only 1 wire, insufficient for 5 burnable
+            target_gates = {"Hadamard", "PauliX"}
 
-        (out_tape,), _ = decompose(
-            tape,
-            lambda obj: obj.name in target_gates,
-            device_wires=device_wires,
-            target_gates=target_gates,
-        )
+            (out_tape,), _ = decompose(
+                tape,
+                lambda obj: obj.name in target_gates,
+                device_wires=device_wires,
+                target_gates=target_gates,
+            )
 
         # Should use fallback decomposition (2 Hadamards)
         assert len(out_tape.operations) == 2
         assert all(op.name == "Hadamard" for op in out_tape.operations)
-
-
-class TestMidCircuitMeasurements:
-    """Unit tests for the mid_circuit_measurements preprocessing transform"""
-
-    @pytest.mark.parametrize(
-        "mcm_method, shots, expected_transform",
-        [
-            ("deferred", 10, qml.defer_measurements),
-            ("deferred", None, qml.defer_measurements),
-            (None, None, qml.defer_measurements),
-            (None, 10, qml.dynamic_one_shot),
-            ("one-shot", 10, qml.dynamic_one_shot),
-        ],
-    )
-    def test_mcm_method(self, mcm_method, shots, expected_transform, mocker):
-        """Test that the preprocessing transform adheres to the specified transform"""
-        dev = qml.device("default.qubit")
-        mcm_config = {"postselect_mode": None, "mcm_method": mcm_method}
-        tape = QuantumScript([qml.measurements.MidMeasureMP(0)], [], shots=shots)
-        spy = mocker.spy(expected_transform, "_transform")
-
-        _, _ = mid_circuit_measurements(tape, dev, mcm_config)
-        spy.assert_called_once()
-
-    @pytest.mark.parametrize("mcm_method", ["device", "tree-traversal"])
-    @pytest.mark.parametrize("shots", [10, None])
-    def test_device_mcm_method(self, mcm_method, shots):
-        """Test that no transform is applied by mid_circuit_measurements when the
-        mcm method is handled by the device"""
-        dev = qml.device("default.qubit")
-        mcm_config = {"postselect_mode": None, "mcm_method": mcm_method}
-        tape = QuantumScript([qml.measurements.MidMeasureMP(0)], [], shots=shots)
-
-        (new_tape,), post_processing_fn = mid_circuit_measurements(tape, dev, mcm_config)
-
-        assert qml.equal(tape, new_tape)
-        assert post_processing_fn == null_postprocessing
-
-    def test_error_incompatible_mcm_method(self):
-        """Test that an error is raised if requesting the one-shot transform without shots"""
-        dev = qml.device("default.qubit")
-        shots = None
-        mcm_config = {"postselect_mode": None, "mcm_method": "one-shot"}
-        tape = QuantumScript([qml.measurements.MidMeasureMP(0)], [], shots=shots)
-
-        with pytest.raises(
-            QuantumFunctionError,
-            match="dynamic_one_shot is only supported with finite shots.",
-        ):
-            _, _ = mid_circuit_measurements(tape, dev, mcm_config)
 
 
 class TestMeasurementsFromCountsOrSamples:
@@ -788,7 +737,7 @@ class TestMeasurementsFromCountsOrSamples:
 
         dev = qml.device("default.qubit", wires=4)
 
-        @partial(validate_device_wires, wires=dev.wires)
+        @validate_device_wires(wires=dev.wires)
         @qml.set_shots(5000)
         @qml.qnode(dev)
         def basic_circuit(theta: float):
@@ -828,7 +777,7 @@ class TestMeasurementsFromCountsOrSamples:
 
         dev = qml.device("default.qubit", wires=4, seed=seed)
 
-        @partial(validate_device_wires, wires=dev.wires)
+        @validate_device_wires(wires=dev.wires)
         @qml.set_shots(5000)
         @qml.qnode(dev)
         def basic_circuit(theta: float):
@@ -867,7 +816,7 @@ class TestMeasurementsFromCountsOrSamples:
 
         dev = qml.device("default.qubit", wires=4)
 
-        @partial(validate_device_wires, wires=dev.wires)
+        @validate_device_wires(wires=dev.wires)
         @qml.set_shots(5000)
         @qml.qnode(dev)
         def basic_circuit():
@@ -969,7 +918,6 @@ def test_validate_multiprocessing_workers_None():
 
 
 class TestDeviceResolveDynamicWires:
-
     def test_many_allocations_no_wires(self):
         """Test that min integer will keep incrementing to higher numbers."""
 

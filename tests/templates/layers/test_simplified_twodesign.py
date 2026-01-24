@@ -21,8 +21,10 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as pnp
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
+@pytest.mark.jax
 def test_standard_validity():
     """Run standard checks with the assert_valid function."""
 
@@ -101,6 +103,7 @@ class TestDecomposition:
                 res_param = o.parameters[0]
                 assert res_param == exp_param
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     @pytest.mark.parametrize(
         "initial_layer_weights, weights, n_wires, target",
         [
@@ -125,6 +128,7 @@ class TestDecomposition:
         for exp, target_exp in zip(expectations, target):
             assert np.allclose(exp, target_exp, atol=tol, rtol=0)
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     def test_custom_wire_labels(self, tol):
         """Test that template can deal with non-numeric, nonconsecutive wire labels."""
         weights = np.random.random(size=(1, 2, 2))
@@ -148,6 +152,20 @@ class TestDecomposition:
 
         assert np.allclose(res1, res2, atol=tol, rtol=0)
         assert np.allclose(state1, state2, atol=tol, rtol=0)
+
+    DECOMP_PARAMS = [
+        ([np.pi], [], range(1)),
+        ([np.pi] * 2, [[[np.pi] * 2]], range(2)),
+        ([np.pi] * 3, [[[np.pi] * 2] * 2], range(3)),
+        ([np.pi] * 4, [[[np.pi] * 2] * 3], range(4)),
+    ]
+
+    @pytest.mark.capture
+    @pytest.mark.parametrize(("initial_layer_weights", "weights", "wires"), DECOMP_PARAMS)
+    def test_decomposition_new(self, initial_layer_weights, weights, wires):
+        op = qml.SimplifiedTwoDesign(initial_layer_weights, weights, wires)
+        for rule in qml.list_decomps(qml.SimplifiedTwoDesign):
+            _test_decomposition_rule(op, rule)
 
 
 class TestInputs:

@@ -38,6 +38,76 @@ class NoMatOp(qml.operation.Operation):
         return [qml.PauliX(self.wires), qml.PauliY(self.wires)]
 
 
+class MatOp(qml.operation.Operation):
+    """Dummy operation for expanding circuit."""
+
+    # pylint: disable=arguments-renamed, invalid-overridden-method
+    @property
+    def has_matrix(self):
+        return True
+
+    def decomposition(self):
+        return [qml.PauliX(self.wires), qml.PauliY(self.wires)]
+
+
+# pylint: disable=too-few-public-methods
+class MyTemplate(qml.operation.Operation):
+    """Temp operator."""
+
+    num_wires = 2
+
+    # pylint: disable=missing-function-docstring
+    def decomposition(self):
+        return [
+            qml.RX(self.data[0], self.wires[0]),
+            qml.RY(self.data[1], self.wires[1]),
+            qml.CNOT(self.wires),
+        ]
+
+
+# pylint: disable=too-few-public-methods
+class CustomIsingXX(qml.operation.Operation):
+    """Temp operator."""
+
+    num_wires = 2
+
+    # pylint: disable=missing-function-docstring
+    def decomposition(self):
+        return [qml.IsingXX(self.data[0], self.wires)]
+
+
+@pytest.fixture(scope="function", autouse=True)
+def custom_decomps():
+    """Locally register decomposition rules."""
+
+    @qml.register_resources({qml.X: 1, qml.Y: 1})
+    def custom_rule_no_mat_op(wires):
+        qml.X(wires)
+        qml.Y(wires)
+
+    @qml.register_resources({qml.X: 1, qml.Y: 1})
+    def custom_rule_mat_op(data, wires):  # pylint: disable=unused-argument
+        qml.X(wires)
+        qml.Y(wires)
+
+    @qml.register_resources({qml.RX: 1, qml.RY: 1, qml.CNOT: 1})
+    def custom_rule_template(data0, data1, wires):
+        qml.RX(data0, wires[0])
+        qml.RY(data1, wires[1])
+        qml.CNOT(wires)
+
+    @qml.register_resources({qml.IsingXX: 1})
+    def custom_rule_isingxx(data, wires):
+        qml.IsingXX(data, wires)
+
+    with qml.decomposition.local_decomps():
+        qml.add_decomps(NoMatOp, custom_rule_no_mat_op)
+        qml.add_decomps(MatOp, custom_rule_mat_op)
+        qml.add_decomps(MyTemplate, custom_rule_template)
+        qml.add_decomps(CustomIsingXX, custom_rule_isingxx)
+        yield
+
+
 # pylint: disable=too-few-public-methods
 class NoMatNoDecompOp(qml.operation.Operation):
     """Dummy operation for checking check_validity throws error when
@@ -61,7 +131,6 @@ class HasDiagonalizingGatesOp(qml.operation.Operator):
 
 # pylint: disable=too-few-public-methods
 class CustomizedSparseOp(qml.operation.Operator):
-
     def __init__(self, wires):
         U = sp.sparse.eye(2 ** len(wires))
         super().__init__(U, wires)
@@ -218,6 +287,27 @@ class TestConfigSetup:
         processed = dev.setup_execution_config(config)
         assert processed.mcm_config.mcm_method == "deferred"
 
+    def test_error_on_unsupported_mcm_method(self):
+        """Test that an error is raised on unsupported mcm_method's."""
+
+        config = ExecutionConfig(mcm_config=MCMConfig(mcm_method="single-branch-statistics"))
+
+        dev = qml.device("default.qubit")
+
+        with pytest.raises(DeviceError, match="not supported on default.qubit"):
+            dev.setup_execution_config(config)
+
+    @pytest.mark.parametrize("mcm_method", ["one-shot", "tree-traversal"])
+    def test_error_on_unsupported_postselect_mode(self, mcm_method):
+        """Tests that fill-shots is not supported on anything but deferred."""
+
+        config = ExecutionConfig(
+            mcm_config=MCMConfig(mcm_method=mcm_method, postselect_mode="fill-shots")
+        )
+        dev = qml.device("default.qubit")
+        with pytest.raises(DeviceError, match="Using postselect_mode='fill-shots'"):
+            dev.setup_execution_config(config)
+
 
 # pylint: disable=too-few-public-methods
 class TestPreprocessing:
@@ -323,6 +413,18 @@ class TestPreprocessing:
             (qml.QFT(wires=range(10)), False),
             (qml.GroverOperator(wires=range(10)), True),
             (qml.GroverOperator(wires=range(14)), False),
+            (
+                qml.IQP(
+                    np.zeros(5, dtype=np.float64), num_wires=5, pattern=[[[i]] for i in range(5)]
+                ),
+                True,
+            ),
+            (
+                qml.IQP(
+                    np.zeros(6, dtype=np.float64), num_wires=6, pattern=[[[i]] for i in range(6)]
+                ),
+                False,
+            ),
             (qml.pow(qml.RX(1.1, 0), 3), True),
             (qml.pow(qml.RX(qml.numpy.array(1.1), 0), 3), False),
             (qml.QubitUnitary(sp.sparse.csr_matrix(np.eye(8)), wires=range(3)), True),
@@ -344,17 +446,6 @@ class TestPreprocessing:
         program = qml.device("default.qubit").preprocess_transforms(
             ExecutionConfig(gradient_method="adjoint")
         )
-
-        class MatOp(qml.operation.Operation):
-            """Dummy operation for expanding circuit."""
-
-            # pylint: disable=arguments-renamed, invalid-overridden-method
-            @property
-            def has_matrix(self):
-                return True
-
-            def decomposition(self):
-                return [qml.PauliX(self.wires), qml.PauliY(self.wires)]
 
         tape1 = qml.tape.QuantumScript([MatOp(wires=0)])
         batch, _ = program((tape1,))
@@ -379,8 +470,15 @@ class TestPreprocessing:
             def has_matrix(self):
                 return True
 
-        tape4 = qml.tape.QuantumScript([CustomOpWithGenerator(qml.numpy.array(1.2), wires=0)])
-        batch, _ = program((tape4,))
+        @qml.register_resources({qml.RX: 1})
+        def custom_decomp(data, wires):
+            qml.RX(data, wires)
+
+        with qml.decomposition.local_decomps():
+            qml.add_decomps(CustomOpWithGenerator, custom_decomp)
+            tape4 = qml.tape.QuantumScript([CustomOpWithGenerator(qml.numpy.array(1.2), wires=0)])
+            batch, _ = program((tape4,))
+
         assert batch[0].circuit == tape4.circuit
 
     @pytest.mark.parametrize(
@@ -731,20 +829,6 @@ class TestPreprocessingIntegration:
     def test_preprocess_single_circuit(self, max_workers):
         """Test integration between preprocessing and execution with numpy parameters."""
 
-        # pylint: disable=too-few-public-methods
-        class MyTemplate(qml.operation.Operation):
-            """Temp operator."""
-
-            num_wires = 2
-
-            # pylint: disable=missing-function-docstring
-            def decomposition(self):
-                return [
-                    qml.RX(self.data[0], self.wires[0]),
-                    qml.RY(self.data[1], self.wires[1]),
-                    qml.CNOT(self.wires),
-                ]
-
         x = 0.928
         y = -0.792
         qscript = qml.tape.QuantumScript(
@@ -781,16 +865,6 @@ class TestPreprocessingIntegration:
     @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     def test_preprocess_batch_circuit(self, max_workers):
         """Test preprocess integrates with default qubit when we start with a batch of circuits."""
-
-        # pylint: disable=too-few-public-methods
-        class CustomIsingXX(qml.operation.Operation):
-            """Temp operator."""
-
-            num_wires = 2
-
-            # pylint: disable=missing-function-docstring
-            def decomposition(self):
-                return [qml.IsingXX(self.data[0], self.wires)]
 
         x = 0.692
 
@@ -857,7 +931,6 @@ class TestPreprocessingIntegration:
         m0 = qml.measure(0)
 
         class MyOp(qml.operation.Operator):
-
             def decomposition(self):
                 return m0.measurements
 
@@ -1120,12 +1193,14 @@ class TestDefaultQubitGraphModeExclusive:
         def decomp_with_work_wire(wires):
             qml.X(wires)
 
-        qml.add_decomps(MyDefaultQubitOp, decomp_fallback, decomp_with_work_wire)
+        with qml.decomposition.local_decomps():
 
-        tape = qml.tape.QuantumScript([MyDefaultQubitOp(0)])
-        dev = qml.device("default.qubit", wires=1)  # Only 1 wire, but decomp needs 5 burnable
-        program = dev.preprocess_transforms()
-        (out_tape,), _ = program([tape])
+            qml.add_decomps(MyDefaultQubitOp, decomp_fallback, decomp_with_work_wire)
+
+            tape = qml.tape.QuantumScript([MyDefaultQubitOp(0)])
+            dev = qml.device("default.qubit", wires=1)  # Only 1 wire, but decomp needs 5 burnable
+            program = dev.preprocess_transforms()
+            (out_tape,), _ = program([tape])
 
         assert len(out_tape.operations) == 2
         assert out_tape.operations[0].name == "Hadamard"

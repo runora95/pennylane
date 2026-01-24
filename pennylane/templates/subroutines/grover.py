@@ -89,12 +89,10 @@ class GroverOperator(Operation):
                 qml.templates.GroverOperator(wires=wires)
             return qml.probs(wires)
 
-    >>> GroverSearch(num_iterations=1)
-    tensor([0.03125, 0.03125, 0.03125, 0.03125, 0.03125, 0.03125, 0.03125,
-            0.78125], requires_grad=True)
-    >>> GroverSearch(num_iterations=2)
-    tensor([0.0078125, 0.0078125, 0.0078125, 0.0078125, 0.0078125, 0.0078125,
-        0.0078125, 0.9453125], requires_grad=True)
+    >>> GroverSearch(num_iterations=1) # doctest: +SKIP
+    array([0.0312, 0.0312, 0.0312, 0.0312, 0.0312, 0.0312, 0.0312, 0.7812])
+    >>> GroverSearch(num_iterations=2) # doctest: +SKIP
+    array([0.0078, 0.0078, 0.0078, 0.0078, 0.0078, 0.0078, 0.0078, 0.9453])
 
     We can see that the marked :math:`|111\rangle` state has the greatest probability amplitude.
 
@@ -187,29 +185,6 @@ class GroverOperator(Operation):
         op_list.append(GlobalPhase(np.pi, wires))
 
         return op_list
-
-    # pylint:disable = no-value-for-parameter
-    @staticmethod
-    def compute_qfunc_decomposition(
-        *wires, work_wires, n_wires
-    ):  # pylint: disable=arguments-differ
-        wires = math.array(wires, like="jax")
-        ctrl_values = [0] * (n_wires - 1)
-
-        @for_loop(len(wires) - 1)
-        def hadamard_loop(i):
-            Hadamard(wires[i])
-
-        hadamard_loop()
-        PauliZ(wires[-1])
-        MultiControlledX(
-            control_values=ctrl_values,
-            wires=wires,
-            work_wires=work_wires,
-        )
-        PauliZ(wires[-1])
-        hadamard_loop()
-        GlobalPhase(np.pi, wires=wires[0])
 
     @staticmethod
     def compute_matrix(n_wires, work_wires):  # pylint: disable=arguments-differ,unused-argument

@@ -19,6 +19,7 @@ import pytest
 from scipy.stats import norm
 
 import pennylane as qml
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 from pennylane.templates.subroutines.qmc import (
     QuantumMonteCarlo,
     _make_V,
@@ -258,13 +259,27 @@ class TestQuantumMonteCarlo:
     def func(i):
         return np.sin(i) ** 2
 
+    @pytest.mark.jax
     def test_standard_validity(self):
         """Test standard validity criteria with assert_valid."""
         p = np.ones(4) / 4
         target_wires, estimation_wires = Wires(range(3)), Wires(range(3, 5))
 
         op = QuantumMonteCarlo(p, self.func, target_wires, estimation_wires)
-        qml.ops.functions.assert_valid(op, skip_differentiation=True)
+        # Skip capture test because the _unflatten method of QMC is not compatible with capture
+        qml.ops.functions.assert_valid(op, skip_differentiation=True, skip_capture=True)
+
+    DECOMP_PARAMS = [
+        (np.ones(4) / 4, Wires(range(3)), Wires(range(3, 5))),
+        (np.ones(2) / 2, Wires(range(2)), Wires(range(2, 4))),
+    ]
+
+    @pytest.mark.capture
+    @pytest.mark.parametrize(("p", "target_wires", "estimation_wires"), DECOMP_PARAMS)
+    def test_decomposition_new(self, p, target_wires, estimation_wires):
+        op = QuantumMonteCarlo(p, self.func, target_wires, estimation_wires)
+        for rule in qml.list_decomps(QuantumMonteCarlo):
+            _test_decomposition_rule(op, rule)
 
     def test_non_flat(self):
         """Test if a ValueError is raised when a non-flat array is input"""

@@ -19,8 +19,10 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as pnp
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
+@pytest.mark.jax
 def test_standard_validity():
     """Check the operation using the assert_valid function."""
     op = qml.AngleEmbedding(features=[1.0, 2.0, 3.0], wires=range(3), rotation="Z")
@@ -91,9 +93,8 @@ class TestDecomposition:
         for gate in tape.operations:
             assert gate.name == "R" + rotation
 
-    def test_state(
-        self,
-    ):
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
+    def test_state(self):
         """Checks the state produced using the rotation='X' strategy."""
 
         features = [np.pi / 2, np.pi / 2, np.pi / 4, 0]
@@ -111,6 +112,7 @@ class TestDecomposition:
 
         assert np.allclose(res, target)
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     def test_fewer_features(self):
         """Tests fewer features than rotation gates."""
 
@@ -127,6 +129,7 @@ class TestDecomposition:
         target = [0, 0, 1, 0, 1]
         assert np.allclose(res, target)
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     def test_custom_wire_labels(self, tol):
         """Test that template can deal with non-numeric, nonconsecutive wire labels."""
         features = np.random.random(size=(3,))
@@ -149,6 +152,19 @@ class TestDecomposition:
 
         assert np.allclose(res1, res2, atol=tol, rtol=0)
         assert np.allclose(state1, state2, atol=tol, rtol=0)
+
+    DECOMP_PARAMS = [
+        ([1.2, 1.3, 0, 0, 1.4], range(5), "Z"),
+        ([1.1, 1.2, 0, 0], range(4), "X"),
+        ([1.5, 1.6, 0], range(3), "Y"),
+    ]
+
+    @pytest.mark.capture
+    @pytest.mark.parametrize(("features", "wires", "rotation"), DECOMP_PARAMS)
+    def test_decomposition_new(self, features, wires, rotation):
+        op = qml.AngleEmbedding(features, wires, rotation=rotation)
+        for rule in qml.list_decomps(qml.AngleEmbedding):
+            _test_decomposition_rule(op, rule)
 
 
 class TestInputs:

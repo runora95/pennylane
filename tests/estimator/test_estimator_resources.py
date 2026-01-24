@@ -14,6 +14,7 @@
 """
 This module contains tests for the Resources container class.
 """
+
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -21,7 +22,7 @@ import pytest
 
 from pennylane.estimator.resources_base import Resources
 
-# pylint: disable= no-self-use,too-few-public-methods,comparison-with-itself
+# pylint: disable= no-self-use,too-few-public-methods,comparison-with-itself,protected-access
 
 
 @dataclass(frozen=True)
@@ -77,49 +78,51 @@ class TestResources:
 
         expected_gate_types = defaultdict(int, {}) if gate_types is None else gate_types
 
-        assert resources.zeroed == zeroed
-        assert resources.any_state == any_state
+        assert resources.zeroed_wires == zeroed
+        assert resources.any_state_wires == any_state
         assert resources.algo_wires == algo
         assert resources.gate_types == expected_gate_types
+        assert resources.total_wires == zeroed + algo + any_state
+        assert resources.total_gates == sum(expected_gate_types.values())
 
     str_data = (
         (
             "--- Resources: ---\n"
             + " Total wires: 5\n"
-            + "    algorithmic wires: 0\n"
-            + "    allocated wires: 5\n"
-            + "\t zero state: 5\n"
-            + "\t any state: 0\n"
+            + "   algorithmic wires: 0\n"
+            + "   allocated wires: 5\n"
+            + "     zero state: 5\n"
+            + "     any state: 0\n"
             + " Total gates : 4\n"
-            + "  'X': 1,\n"
-            + "  'Z': 1,\n"
-            + "  'Hadamard': 2"
+            + "   'X': 1,\n"
+            + "   'Z': 1,\n"
+            + "   'Hadamard': 2"
         ),
         (
             "--- Resources: ---\n"
             + " Total wires: 1.112E+4\n"
-            + "    algorithmic wires: 22\n"
-            + "    allocated wires: 11100\n"
-            + "\t zero state: 8753\n"
-            + "\t any state: 2347\n"
+            + "   algorithmic wires: 22\n"
+            + "   allocated wires: 11100\n"
+            + "     zero state: 8753\n"
+            + "     any state: 2347\n"
             + " Total gates : 1.260E+3\n"
-            + "  'PhaseShift': 2,\n"
-            + "  'CNOT': 791,\n"
-            + "  'Hadamard': 467"
+            + "   'PhaseShift': 2,\n"
+            + "   'CNOT': 791,\n"
+            + "   'Hadamard': 467"
         ),
         (
             "--- Resources: ---\n"
             + " Total wires: 730\n"
-            + "    algorithmic wires: 108\n"
-            + "    allocated wires: 622\n"
-            + "\t zero state: 400\n"
-            + "\t any state: 222\n"
+            + "   algorithmic wires: 108\n"
+            + "   allocated wires: 622\n"
+            + "     zero state: 400\n"
+            + "     any state: 222\n"
             + " Total gates : 5.746E+3\n"
-            + "  'RX': 3,\n"
-            + "  'CNOT': 4.523E+3,\n"
-            + "  'X': 100,\n"
-            + "  'Y': 120,\n"
-            + "  'Z': 1.000E+3"
+            + "   'RX': 3,\n"
+            + "   'CNOT': 4.523E+3,\n"
+            + "   'X': 100,\n"
+            + "   'Y': 120,\n"
+            + "   'Z': 1.000E+3"
         ),
     )
 
@@ -165,7 +168,7 @@ class TestResources:
     @pytest.mark.parametrize("gate_types, gate_set, expected_str", test_data)
     def test_gate_breakdown(self, gate_types, gate_set, expected_str):
         """Test that the gate_breakdown method correctly displays the information."""
-        resources = Resources(zeroed=4, gate_types=gate_types)
+        resources = Resources(zeroed_wires=4, gate_types=gate_types)
         assert resources.gate_breakdown(gate_set=gate_set) == expected_str
 
     @pytest.mark.parametrize("gate_types", gate_types_data + (None,))
@@ -343,3 +346,38 @@ class TestResources:
         expected_matmul = Resources(zeroed, any_state * k, algo * k, expected_gate_types_matmul)
 
         assert (res.multiply_parallel(k)) == expected_matmul
+
+    def test_ipython_display(self, capsys):
+        """Test that _ipython_display_ prints the string representation."""
+
+        # Helper class to simulate a Gate object (required by Resources API)
+        class FakeGate:
+            """Helper class to simulate a Gate object."""
+
+            def __init__(self, name):
+                self.name = name
+                self.params = {}
+
+        # Create gate types using objects, NOT strings
+        gate_types = {FakeGate("Hadamard"): 5, FakeGate("CNOT"): 3}
+
+        resources = Resources(
+            zeroed_wires=2, any_state_wires=1, algo_wires=3, gate_types=gate_types
+        )
+
+        # Call the method
+        resources._ipython_display_()
+
+        # Capture output and verify
+        captured = capsys.readouterr()
+        assert captured.out == str(resources) + "\n"
+
+    def test_ipython_display_empty_resources(self, capsys):
+        """Test _ipython_display_ with empty Resources object."""
+
+        resources = Resources(zeroed_wires=0, any_state_wires=0, algo_wires=0, gate_types={})
+
+        resources._ipython_display_()
+        captured = capsys.readouterr()
+
+        assert captured.out == str(resources) + "\n"

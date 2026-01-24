@@ -66,7 +66,8 @@ def construct_execution_config(qnode: QNode, resolve: bool | None = True) -> Exe
                     interface=<Interface.AUTO: 'auto'>,
                     derivative_order=1,
                     mcm_config=MCMConfig(mcm_method=None, postselect_mode=None),
-                    convert_to_numpy=True)
+                    convert_to_numpy=True,
+                    executor_backend=<class 'pennylane.concurrency.executors.native.multiproc.MPPoolExec'>)
 
     Specifying ``resolve=True`` will then resolve these properties appropriately for the
     given ``QNode`` configuration that was provided,
@@ -78,13 +79,12 @@ def construct_execution_config(qnode: QNode, resolve: bool | None = True) -> Exe
                     use_device_jacobian_product=False,
                     gradient_method='backprop',
                     gradient_keyword_arguments={},
-                    device_options={'max_workers': None,
-                                    'prng_key': None,
-                                    'rng': Generator(PCG64) at 0x15F6BB680},
+                    device_options={'max_workers': None, 'rng': ..., 'prng_key': None},
                     interface=<Interface.NUMPY: 'numpy'>,
                     derivative_order=1,
-                    mcm_config=MCMConfig(mcm_method=None, postselect_mode=None),
-                        convert_to_numpy=True)
+                    mcm_config=MCMConfig(mcm_method='deferred', postselect_mode=None),
+                    convert_to_numpy=True,
+                    executor_backend=<class 'pennylane.concurrency.executors.native.multiproc.MPPoolExec'>)
     """
 
     @functools.wraps(qnode)
@@ -118,7 +118,7 @@ def construct_execution_config(qnode: QNode, resolve: bool | None = True) -> Exe
                 }
             shots = qnode._get_shots(kwargs)  # pylint: disable=protected-access
             tape = qml.tape.make_qscript(qnode.func, shots=shots)(*args, **kwargs)
-            batch, _ = qnode.transform_program((tape,))
+            batch, _ = qnode.compile_pipeline((tape,))
             config = _resolve_execution_config(config, qnode.device, batch)
 
         return config

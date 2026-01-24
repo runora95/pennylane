@@ -16,6 +16,8 @@ Test the resource configuration class.
 """
 import pytest
 
+from pennylane.estimator.ops.op_math.controlled_ops import CRX, CRY, CRZ
+from pennylane.estimator.ops.qubit.parametric_ops_single_qubit import RX, RY, RZ
 from pennylane.estimator.resource_config import ResourceConfig
 from pennylane.estimator.resource_operator import ResourceOperator
 
@@ -143,6 +145,22 @@ class TestResourceConfig:
         with pytest.raises(ValueError, match="Precision must be a non-negative value"):
             config.set_single_qubit_rot_precision(negative_precision)
 
+    def test_set_single_qubit_rot_precision(self):
+        """Test that the set_single_qubit_rot_precision works as expected"""
+        config = ResourceConfig()
+        custom_precision = 1.23 * 1e-4
+
+        for single_qubit_rot_op in [RX, RY, RZ, CRX, CRY, CRZ]:
+            assert (
+                config.resource_op_precisions[single_qubit_rot_op]["precision"] != custom_precision
+            )
+
+        config.set_single_qubit_rot_precision(precision=custom_precision)
+        for single_qubit_rot_op in [RX, RY, RZ, CRX, CRY, CRZ]:
+            assert (
+                config.resource_op_precisions[single_qubit_rot_op]["precision"] == custom_precision
+            )
+
     def test_set_precision_raises_for_negative_value(self):
         """Test that set_precision raises a ValueError for a negative precision."""
         config = ResourceConfig()
@@ -151,18 +169,38 @@ class TestResourceConfig:
         with pytest.raises(ValueError, match="Precision must be a non-negative value"):
             config.set_precision(DummyOp, negative_precision)
 
-    def test_set_precision_raises_error_for_unsupported_op(self):
+    @pytest.mark.parametrize(
+        "resource_key",
+        ("precision", "coeff_precision", "rot_precision"),
+    )
+    def test_set_precision_raises_error_for_unsupported_op(self, resource_key):
         """Test that set_precision raises ValueError for an unsupported operator."""
         config = ResourceConfig()
-        config.resource_op_precisions[DummyOp] = {"bits": 10}
-        match_str = "Setting precision for DummyOp is not supported."
+        config.resource_op_precisions[DummyOp] = {"bits": 10}  # only valid key is bits
+        match_str = f"Setting '{resource_key}' for DummyOp is not supported."
         with pytest.raises(ValueError, match=match_str):
-            config.set_precision(DummyOp, 0.123)
+            config.set_precision(DummyOp, 0.123, resource_key=resource_key)
 
     def test_set_precision_sets_value(self):
         """Test that set_precision correctly sets the precision for a supported operator."""
         config = ResourceConfig()
-        config.resource_op_precisions[DummyOp] = {"precision": 1e-9}
+        config.resource_op_precisions[DummyOp] = {
+            "precision": 1e-9,
+            "coeff_precision": 1e-5,
+            "rot_precision": 1e-3,
+            "bits": 10,
+        }
         new_precision = 1e-5
+        new_coeff_precision = 0.123 * 1e-4
+        new_rot_precision = 1e-3
+        new_bits = 12
+
         config.set_precision(DummyOp, new_precision)
+        config.set_precision(DummyOp, new_coeff_precision, resource_key="coeff_precision")
+        config.set_precision(DummyOp, new_rot_precision, resource_key="rot_precision")
+        config.set_precision(DummyOp, new_bits, resource_key="bits")
+
         assert config.resource_op_precisions[DummyOp]["precision"] == new_precision
+        assert config.resource_op_precisions[DummyOp]["coeff_precision"] == new_coeff_precision
+        assert config.resource_op_precisions[DummyOp]["rot_precision"] == new_rot_precision
+        assert config.resource_op_precisions[DummyOp]["bits"] == new_bits

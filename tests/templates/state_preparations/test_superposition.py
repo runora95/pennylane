@@ -112,6 +112,7 @@ def test_order_states(basis_states, exp_map):
     assert order_states(basis_states) == exp_map
 
 
+@pytest.mark.jax
 def test_standard_validity():
     """Check the operation using the assert_valid function."""
 
@@ -127,6 +128,7 @@ def test_standard_validity():
 class TestSuperposition:
     """Test the Superposition template."""
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     @pytest.mark.parametrize("probs, bases", PROBS_BASES)
     def test_correct_output(self, probs, bases):
         """Test the correct output of the Superposition template."""

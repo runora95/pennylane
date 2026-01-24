@@ -21,8 +21,10 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as pnp
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
+@pytest.mark.jax
 def test_standard_validity():
     """Check the operation using the assert_valid function."""
     features = [1.0, 2.0]
@@ -156,6 +158,7 @@ class TestDecomposition:
         with pytest.raises(ValueError, match="did not recognize"):
             circuit(x=[1])
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     def test_state_zero_weights(self, qubit_device, n_subsystems, tol):
         """Checks the state is correct if the weights are zero."""
 
@@ -178,6 +181,7 @@ class TestDecomposition:
         target = [1, -1, 0, 1, 1]
         assert np.allclose(res, target[:n_subsystems], atol=tol, rtol=0)
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     @pytest.mark.parametrize(
         "weights, target",
         [([[np.pi, 0, 0]], [1, 1]), ([[np.pi / 2, 0, 0]], [0, 0]), ([[0, 0, 0]], [-1, -1])],
@@ -197,6 +201,7 @@ class TestDecomposition:
 
         assert np.allclose(res, target, atol=tol, rtol=0)
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     @pytest.mark.parametrize(
         "n_wires, features, weights, target",
         [
@@ -240,6 +245,18 @@ class TestDecomposition:
 
         assert np.allclose(res1, res2, atol=tol, rtol=0)
         assert np.allclose(state1, state2, atol=tol, rtol=0)
+
+    DECOMP_PARAMS = [
+        ([0], [[0, 0, np.pi / 2]], range(2), "X"),
+        ([[0, 0]], [[[0, 0, 0, 0, 0, np.pi / 2]]], range(3), "X"),
+    ]
+
+    @pytest.mark.capture
+    @pytest.mark.parametrize(("features", "weights", "wires", "local_field"), DECOMP_PARAMS)
+    def test_decomposition_new(self, features, weights, wires, local_field):
+        op = qml.QAOAEmbedding(features, weights, wires, local_field=local_field)
+        for rule in qml.list_decomps(qml.QAOAEmbedding):
+            _test_decomposition_rule(op, rule)
 
 
 class TestInputs:

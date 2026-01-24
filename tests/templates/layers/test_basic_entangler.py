@@ -21,8 +21,10 @@ import pytest
 
 import pennylane as qml
 from pennylane import numpy as pnp
+from pennylane.ops.functions.assert_valid import _test_decomposition_rule
 
 
+@pytest.mark.jax
 def test_standard_validity():
     """Check the operation using the assert_valid function."""
 
@@ -71,6 +73,7 @@ class TestDecomposition:
 
         assert rotation in [type(gate) for gate in queue]
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     @pytest.mark.parametrize(
         "weights, n_wires, target",
         [
@@ -93,6 +96,7 @@ class TestDecomposition:
         expectations = circuit(weights)
         np.testing.assert_allclose(expectations, target, atol=tol, rtol=0)
 
+    @pytest.mark.usefixtures("enable_and_disable_graph_decomp")
     def test_custom_wire_labels(self, tol):
         """Test that template can deal with non-numeric, nonconsecutive wire labels."""
         weights = np.random.random(size=(1, 3))
@@ -115,6 +119,21 @@ class TestDecomposition:
 
         assert np.allclose(res1, res2, atol=tol, rtol=0)
         assert np.allclose(state1, state2, atol=tol, rtol=0)
+
+    DECOMP_PARAMS = [
+        ([[np.pi]], range(1), qml.RX),
+        ([[np.pi] * 2], range(2), qml.RY),
+        ([[np.pi] * 3], range(3), qml.RZ),
+        ([[np.pi] * 4], range(4), qml.RX),
+        ([[[np.pi, 1, 2, 1]] * 4], range(4), qml.RX),
+    ]
+
+    @pytest.mark.capture
+    @pytest.mark.parametrize(("weights", "wires", "rotation"), DECOMP_PARAMS)
+    def test_decomposition_new(self, weights, wires, rotation):
+        op = qml.BasicEntanglerLayers(weights, wires, rotation=rotation)
+        for rule in qml.list_decomps(qml.BasicEntanglerLayers):
+            _test_decomposition_rule(op, rule)
 
 
 class TestInputs:

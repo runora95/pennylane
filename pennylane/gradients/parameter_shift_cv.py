@@ -465,7 +465,13 @@ def second_order_param_shift(tape, dev_wires, argnum=None, shifts=None, gradient
                 g = math.zeros_like(math.atleast_1d(results[0]), like=interface)
 
                 if grad_value:
-                    g = math.scatter_element_add(g, obs_ind, grad_value, like=interface)
+                    grad_value_isscalar = math.ndim(grad_value[0]) == 0
+                    g = math.scatter_element_add(
+                        g,
+                        obs_ind,
+                        grad_value[0] if grad_value_isscalar else grad_value,
+                        like=interface,
+                    )
 
                 grads.append(g[0] if isscalar else g)
                 continue
@@ -513,7 +519,7 @@ def _expand_transform_param_shift_cv(
     expanded_tape = expand_invalid_trainable(tape)
 
     def null_postprocessing(results):
-        """A postprocesing function returned by a transform that only converts the batch of results
+        """A postprocessing function returned by a transform that only converts the batch of results
         into a result for a single ``QuantumTape``.
         """
         return results[0]

@@ -35,17 +35,14 @@ By default, this system is disabled.
     ~disable_graph
     ~enabled_graph
 
-.. code-block:: pycon
-
-    >>> import pennylane as qml
-    >>> qml.decomposition.enabled_graph()
-    False
-    >>> qml.decomposition.enable_graph()
-    >>> qml.decomposition.enabled_graph()
-    True
-    >>> qml.decomposition.disable_graph()
-    >>> qml.decomposition.enabled_graph()
-    False
+>>> qml.decomposition.enabled_graph()
+False
+>>> qml.decomposition.enable_graph()
+>>> qml.decomposition.enabled_graph()
+True
+>>> qml.decomposition.disable_graph()
+>>> qml.decomposition.enabled_graph()
+False
 
 .. _decomps_rules:
 
@@ -76,8 +73,6 @@ must declare its resource requirements using the ``register_resources`` decorato
 
 .. code-block:: python
 
-    import pennylane as qml
-
     @qml.register_resources({qml.H: 2, qml.CZ: 1})
     def my_cnot(wires):
         qml.H(wires=wires[1])
@@ -95,6 +90,7 @@ Inspecting and Managing Decomposition Rules
     ~add_decomps
     ~list_decomps
     ~has_decomp
+    ~local_decomps
 
 PennyLane maintains a global dictionary of decomposition rules. New decomposition rules can be
 registered under an operator using ``add_decomps``, and ``list_decomps`` can be called to inspect
@@ -112,32 +108,26 @@ guarantee a decomposition to the desired target gate set:
 
 .. code-block:: python
 
-    import pennylane as qml
-
     with qml.queuing.AnnotatedQueue() as q:
         qml.CRX(0.5, wires=[0, 1])
 
     tape = qml.tape.QuantumScript.from_queue(q)
     [new_tape], _ = qml.transforms.decompose([tape], gate_set={"RX", "RY", "RZ", "CZ"})
 
-.. code-block:: pycon
-
-    >>> new_tape.operations
-    [RZ(1.5707963267948966, wires=[1]),
-     RY(0.25, wires=[1]),
-     CNOT(wires=[0, 1]),
-     RY(-0.25, wires=[1]),
-     CNOT(wires=[0, 1]),
-     RZ(-1.5707963267948966, wires=[1])]
+>>> new_tape.operations
+[RZ(1.5707963267948966, wires=[1]),
+    RY(0.25, wires=[1]),
+    CNOT(wires=[0, 1]),
+    RY(-0.25, wires=[1]),
+    CNOT(wires=[0, 1]),
+    RZ(-1.5707963267948966, wires=[1])]
 
 With the new system enabled, the transform produces the expected outcome.
 
-.. code-block:: pycon
-
-    >>> qml.decomposition.enable_graph()
-    >>> [new_tape], _ = qml.transforms.decompose([tape], gate_set={"RX", "RY", "RZ", "CZ"})
-    >>> new_tape.operations
-    [RX(0.25, wires=[1]), CZ(wires=[0, 1]), RX(-0.25, wires=[1]), CZ(wires=[0, 1])]
+>>> qml.decomposition.enable_graph()
+>>> [new_tape], _ = qml.transforms.decompose([tape], gate_set={"RX", "RY", "RZ", "CZ"})
+>>> new_tape.operations
+[RX(0.25, wires=[1]), CZ(wires=[0, 1]), RX(-0.25, wires=[1]), CZ(wires=[0, 1])]
 
 **Customizing Decompositions**
 
@@ -156,9 +146,6 @@ gates; when it comes to ``qml.CNOT``, the system will choose the most efficient 
 among ``my_cnot1``, ``my_cnot2``, and all existing decomposition rules defined for ``qml.CNOT``.
 
 .. code-block:: python
-
-    from functools import partial
-    import pennylane as qml
 
     qml.decomposition.enable_graph()
 
@@ -182,8 +169,7 @@ among ``my_cnot1``, ``my_cnot2``, and all existing decomposition rules defined f
         qml.RY(np.pi/2, wires[1])
         qml.Z(wires[1])
 
-    @partial(
-        qml.transforms.decompose,
+    @qml.transforms.decompose(
         gate_set={"RX", "RZ", "CZ", "GlobalPhase"},
         alt_decomps={qml.CNOT: [my_cnot1, my_cnot2]},
         fixed_decomps={qml.IsingXX: isingxx_decomp},
@@ -194,11 +180,8 @@ among ``my_cnot1``, ``my_cnot2``, and all existing decomposition rules defined f
         qml.IsingXX(0.5, wires=[0, 1])
         return qml.state()
 
-
-.. code-block:: pycon
-
-    >>> qml.specs(circuit)()["resources"].gate_types
-    defaultdict(int, {'RZ': 12, 'RX': 7, 'GlobalPhase': 6, 'CZ': 3})
+>>> qml.specs(circuit)()["resources"].gate_types
+defaultdict(int, {'RZ': 12, 'RX': 7, 'GlobalPhase': 6, 'CZ': 3})
 
 To register alternative decomposition rules under an operator to be used globally, use
 :func:`~pennylane.add_decomps`. See :ref:`Inspecting and Managing Decomposition Rules <decomps_management>`
@@ -226,20 +209,17 @@ operator towards a target gate set.
     )
     solution = graph.solve()
 
-.. code-block:: pycon
-
-    >>> with qml.queuing.AnnotatedQueue() as q:
-    ...     solution.decomposition(op)(0.5, wires=[0, 1])
-    ...
-    >>> q.queue
-    [RZ(1.5707963267948966, wires=[1]),
-     RY(0.25, wires=[1]),
-     CNOT(wires=[0, 1]),
-     RY(-0.25, wires=[1]),
-     CNOT(wires=[0, 1]),
-     RZ(-1.5707963267948966, wires=[1])]
-    >>> graph.resource_estimate(op)
-    <num_gates=10, gate_counts={RZ: 6, CNOT: 2, RX: 2}>
+>>> with qml.queuing.AnnotatedQueue() as q:
+...     solution.decomposition(op)(0.5, wires=[0, 1])
+>>> q.queue
+[RZ(1.5707963267948966, wires=[1]),
+    RY(0.25, wires=[1]),
+    CNOT(wires=[0, 1]),
+    RY(-0.25, wires=[1]),
+    CNOT(wires=[0, 1]),
+    RZ(-1.5707963267948966, wires=[1])]
+>>> graph.resource_estimate(op)
+<num_gates=10, gate_counts={RZ: 6, CNOT: 2, RX: 2}>
 
 Utility Classes
 ~~~~~~~~~~~~~~~
@@ -248,10 +228,12 @@ Utility Classes
     :toctree: api
 
     ~DecompositionError
+    ~gate_set.GateSet
 
 """
 
 from pennylane.exceptions import DecompositionError
+from .gate_set import GateSet
 from .utils import (
     enable_graph,
     disable_graph,
@@ -275,4 +257,5 @@ from .decomposition_rule import (
     add_decomps,
     list_decomps,
     has_decomp,
+    local_decomps,
 )

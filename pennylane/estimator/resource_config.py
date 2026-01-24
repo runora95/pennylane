@@ -12,12 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 r"""This module contains the ResourceConfig class, which tracks the configuration for resource estimation"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
 from typing import TYPE_CHECKING
+
+from pennylane.estimator.ops.op_math.controlled_ops import CRX, CRY, CRZ, ControlledPhaseShift, CRot
+from pennylane.estimator.ops.qubit.matrix_ops import QubitUnitary
+from pennylane.estimator.ops.qubit.parametric_ops_multi_qubit import MultiRZ, PauliRot
+from pennylane.estimator.ops.qubit.parametric_ops_single_qubit import RX, RY, RZ, Rot
+from pennylane.estimator.ops.qubit.qchem_ops import SingleExcitation
+from pennylane.estimator.templates import (
+    GQSP,
+    QSP,
+    AliasSampling,
+    GQSPTimeEvolution,
+    MPSPrep,
+    QROMStatePreparation,
+    SelectPauliRot,
+)
+from pennylane.estimator.templates.trotter import TrotterVibrational, TrotterVibronic
 
 if TYPE_CHECKING:
     from pennylane.estimator.resource_operator import ResourceOperator
@@ -33,14 +48,101 @@ class DecompositionType(StrEnum):
 
 
 class ResourceConfig:
-    """A container to track the configuration for precisions and custom decompositions for the
-    resource estimation pipeline.
+    """Sets the values of precisions and custom decompositions when estimating resources for a
+    quantum workflow.
+
+    The precisions and custom decompositions of resource operators can be
+    modified using the :meth:`~.pennylane.estimator.resource_config.ResourceConfig.set_precision`
+    and :meth:`~.pennylane.estimator.resource_config.ResourceConfig.set_decomp` functions of the
+    :code:`ResourceConfig` class.
+
+    **Example**
+
+    This example shows how to set a custom precision value for every instance of the :code:`RX` gate.
+
+    .. code-block:: pycon
+
+        >>> import pennylane.estimator as qre
+        >>> my_config = qre.ResourceConfig()
+        >>> my_config.set_precision(qre.RX, precision=1e-5)
+        >>> res = qre.estimate(
+        ...     qre.RX(),
+        ...     gate_set={"RZ", "T", "Hadamard"},
+        ...     config=my_config,
+        ... )
+        >>> print(res)
+        --- Resources: ---
+         Total wires: 1
+           algorithmic wires: 1
+           allocated wires: 0
+             zero state: 0
+             any state: 0
+         Total gates : 28
+           'T': 28
+
+    The :code:`ResourceConfig` can also be used to set custom decompositions. The following example
+    shows how to define a custom decomposition for the ``RX`` gate.
+
+    .. code-block:: pycon
+
+        >>> def custom_RX_decomp(precision):  # RX = H @ RZ @ H
+        ...     h = qre.Hadamard.resource_rep()
+        ...     rz = qre.RZ.resource_rep(precision)
+        ...     return [qre.GateCount(h, 2), qre.GateCount(rz, 1)]
+        >>>
+        >>> my_config = qre.ResourceConfig()
+        >>> my_config.set_decomp(qre.RX, custom_RX_decomp)
+        >>> res = qre.estimate(
+        ...     qre.RX(precision=None),
+        ...     gate_set={"RZ", "T", "Hadamard"},
+        ...     config=my_config,
+        ... )
+        >>> print(res)
+        --- Resources: ---
+         Total wires: 1
+           algorithmic wires: 1
+           allocated wires: 0
+             zero state: 0
+             any state: 0
+         Total gates : 3
+           'RZ': 1,
+           'Hadamard': 2
+
     """
 
     def __init__(self) -> None:
         _DEFAULT_PRECISION = 1e-9
-        _DEFAULT_BIT_PRECISION = 15
-        self.resource_op_precisions = {}
+        _DEFAULT_PHASEGRAD_PRECISION = 1e-6
+        self.resource_op_precisions = {
+            RX: {"precision": _DEFAULT_PRECISION},
+            RY: {"precision": _DEFAULT_PRECISION},
+            RZ: {"precision": _DEFAULT_PRECISION},
+            Rot: {"precision": None},
+            CRX: {"precision": None},
+            CRY: {"precision": None},
+            CRZ: {"precision": None},
+            CRot: {"precision": None},
+            ControlledPhaseShift: {"precision": None},
+            QubitUnitary: {"precision": _DEFAULT_PRECISION},
+            MultiRZ: {"precision": None},
+            PauliRot: {"precision": None},
+            SingleExcitation: {"precision": None},
+            SelectPauliRot: {"precision": _DEFAULT_PRECISION},
+            AliasSampling: {"precision": _DEFAULT_PRECISION},
+            MPSPrep: {"precision": None},
+            QROMStatePreparation: {"precision": _DEFAULT_PRECISION},
+            TrotterVibronic: {
+                "phase_grad_precision": _DEFAULT_PHASEGRAD_PRECISION,
+                "coeff_precision": 1e-3,
+            },
+            TrotterVibrational: {
+                "phase_grad_precision": _DEFAULT_PHASEGRAD_PRECISION,
+                "coeff_precision": 1e-3,
+            },
+            GQSP: {"rotation_precision": None},
+            QSP: {"rotation_precision": None},
+            GQSPTimeEvolution: {"poly_approx_precision": None},
+        }
         self._custom_decomps = {}
         self._adj_custom_decomps = {}
         self._ctrl_custom_decomps = {}
@@ -90,24 +192,24 @@ class ResourceConfig:
     def __repr__(self) -> str:
         return f"ResourceConfig(precisions = {self.resource_op_precisions}, custom_decomps = {self.custom_decomps}, adj_custom_decomps = {self.adj_custom_decomps}, ctrl_custom_decomps = {self.ctrl_custom_decomps}, pow_custom_decomps = {self.pow_custom_decomps})"
 
-    def set_precision(self, op_type: type[ResourceOperator], precision: float) -> None:
+    def set_precision(
+        self,
+        op_type: type[ResourceOperator],
+        precision: float | int,
+        resource_key: str = "precision",
+    ) -> None:
         r"""Sets the precision for a given resource operator.
-
-        This method updates the precision value for operators that use a single
-        tolerance parameter (e.g., for synthesis error). It will raise an error
-        if you attempt to set the precision for an operator that is not
-        configurable or uses bit-precisions. A negative precision will also raise an error.
 
         Args:
             op_type (type[:class:`~.pennylane.estimator.resource_operator.ResourceOperator`]): the operator class for which
                 to set the precision
-            precision (float): The desired precision tolerance. A smaller
-                value corresponds to a higher precision compilation, which may
-                increase the required gate counts. Must be greater than 0.
+            precision (float | int): The desired precision tolerance. Must be greater than 0.
+            resource_key (str): the name of the specific precision parameter to be updated
 
         Raises:
             ValueError: If ``op_type`` is not a configurable operator or if setting
                 the precision for it is not supported, or if ``precision`` is negative.
+            ValueError: If ``resource_key`` is not a supported parameter for the given ``op_type``.
 
         **Example**
 
@@ -130,27 +232,42 @@ class ResourceConfig:
 
             Default precision for SelectPauliRot: 1e-09
             New precision for SelectPauliRot: 1e-05
+
+        .. details::
+            :title: Usage Details
+
+            Some resource operators have multiple parameters which tune the precision
+            of the operator's decomposition. For example, the
+            :class:`~.estimator.templates.trotter.TrotterVibronic` operator has parameters
+            ``phase_grad_precision`` and ``coeff_precision``. A dictionary of all such parameters
+            of an operator can be accessed through ``ResourceConfig.resource_op_precisions``:
+
+            >>> import pennylane.estimator as qre
+            >>> my_config = qre.ResourceConfig()
+            >>> my_config.resource_op_precisions[qre.TrotterVibronic]
+            {'phase_grad_precision': 1e-06, 'coeff_precision': 0.001}
+
+            We can modify the default value of the ``coeff_precision``:
+
+            >>> my_config.set_precision(qre.TrotterVibronic, 1e-9, resource_key="coeff_precision")
+            >>> my_config.resource_op_precisions[qre.TrotterVibronic]
+            {'phase_grad_precision': 1e-06, 'coeff_precision': 1e-09}
+
         """
         if precision < 0:
             raise ValueError(f"Precision must be a non-negative value, but got {precision}.")
 
         if op_type not in self.resource_op_precisions:
-            configurable_ops = sorted(
-                [
-                    op.__name__
-                    for op, params in self.resource_op_precisions.items()
-                    if "precision" in params
-                ]
-            )
+            configurable_ops = sorted([op.__name__ for op in self.resource_op_precisions])
             raise ValueError(
                 f"{op_type.__name__} is not a configurable operator. "
                 f"Configurable operators are: {', '.join(configurable_ops)}"
             )
 
-        if "precision" not in self.resource_op_precisions[op_type]:
-            raise ValueError(f"Setting precision for {op_type.__name__} is not supported.")
+        if resource_key not in self.resource_op_precisions[op_type]:
+            raise ValueError(f"Setting '{resource_key}' for {op_type.__name__} is not supported.")
 
-        self.resource_op_precisions[op_type]["precision"] = precision
+        self.resource_op_precisions[op_type][resource_key] = precision
 
     def set_single_qubit_rot_precision(self, precision: float) -> None:
         r"""Sets the synthesis precision for all single-qubit rotation gates.
@@ -181,26 +298,22 @@ class ResourceConfig:
             import pennylane.estimator as qre
 
             config = qre.ResourceConfig()
-            print(f"Default RX precision: {config.resource_op_precisions[qre.RX]['precision']}")
-            print(f"Default RY precision: {config.resource_op_precisions[qre.RY]['precision']}")
-            print(f"Default RZ precision: {config.resource_op_precisions[qre.RZ]['precision']}")
+            rot_ops = [qre.RX, qre.RY, qre.RZ, qre.CRX, qre.CRY, qre.CRZ]
+            print([config.resource_op_precisions[op]['precision'] for op in rot_ops])
 
             config.set_single_qubit_rot_precision(1e-5)
-            print(f"Updated RX precision: {config.resource_op_precisions[qre.RX]['precision']}")
-            print(f"Updated RY precision: {config.resource_op_precisions[qre.RY]['precision']}")
-            print(f"Updated RZ precision: {config.resource_op_precisions[qre.RZ]['precision']}")
+            print([config.resource_op_precisions[op]['precision'] for op in rot_ops])
 
         .. code-block:: pycon
 
-            Default RX precision: 1e-09
-            Default RY precision: 1e-09
-            Default RZ precision: 1e-09
-            Updated RX precision: 1e-05
-            Updated RY precision: 1e-05
-            Updated RZ precision: 1e-05
+            [1e-09, 1e-09, 1e-09, 1e-09, 1e-09, 1e-09]
+            [1e-05, 1e-05, 1e-05, 1e-05, 1e-05, 1e-05]
         """
         if precision < 0:
             raise ValueError(f"Precision must be a non-negative value, but got {precision}.")
+
+        for op in [RX, RY, RZ, CRX, CRY, CRZ]:
+            self.resource_op_precisions[op]["precision"] = precision
 
     def set_decomp(
         self,
@@ -214,8 +327,7 @@ class ResourceConfig:
             op_type (type[:class:`~.pennylane.estimator.resource_operator.ResourceOperator`]): the operator class whose decomposition is being overriden.
             decomp_func (Callable): the new resource decomposition function to be set as default.
             decomp_type (None | DecompositionType): the decomposition type to override. Options are
-                ``"adj"``, ``"pow"``, ``"ctrl"``,
-                and ``"base"``. Default is ``"base"``.
+                ``"adj"``, ``"pow"``, ``"ctrl"``, and ``"base"``. Default is ``"base"``.
 
         Raises:
             ValueError: If ``decomp_type`` is not a valid decomposition type.
@@ -239,24 +351,28 @@ class ResourceConfig:
 
         .. code-block:: pycon
 
-            >>> print(qre.estimate_resources(qre.X(), gate_set={"Hadamard", "Z", "S"}))
+            >>> print(qre.estimate(qre.X(), gate_set={"Hadamard", "Z", "S"}))
             --- Resources: ---
-            Total qubits: 1
-            Total gates : 4
-            Qubit breakdown:
-              clean qubits: 0, dirty qubits: 0, algorithmic qubits: 1
-            Gate breakdown:
-              {'Hadamard': 2, 'S': 2}
+             Total wires: 1
+                algorithmic wires: 1
+                allocated wires: 0
+                 zero state: 0
+                 any state: 0
+             Total gates : 4
+              'S': 2,
+              'Hadamard': 2
             >>> config = qre.ResourceConfig()
             >>> config.set_decomp(qre.X, custom_res_decomp)
-            >>> print(qre.estimate_resources(qre.X(), gate_set={"Hadamard", "Z", "S"}, config=config))
+            >>> print(qre.estimate(qre.X(), gate_set={"Hadamard", "Z", "S"}, config=config))
             --- Resources: ---
-            Total qubits: 1
-            Total gates : 3
-            Qubit breakdown:
-              clean qubits: 0, dirty qubits: 0, algorithmic qubits: 1
-            Gate breakdown:
-              {'S': 1, 'Hadamard': 2}
+             Total wires: 1
+                algorithmic wires: 1
+                allocated wires: 0
+                 zero state: 0
+                 any state: 0
+             Total gates : 3
+              'S': 2,
+              'Hadamard': 1
         """
         if decomp_type is None:
             decomp_type = DecompositionType("base")

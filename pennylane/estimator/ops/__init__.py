@@ -31,6 +31,8 @@ from .qubit import (
     PauliRot,
     MultiRZ,
     SingleExcitation,
+    QubitUnitary,
+    PCPhase,
 )
 
 from .op_math import (
