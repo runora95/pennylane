@@ -39,7 +39,7 @@ jobs:
           git checkout -b "$BRANCH"
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"
-          git commit -m "exclude files from pr"
+          # git commit -m "exclude files from pr"
           # check for new changes on the rc branch only, based on the diff between master and main
           if ! git diff master HEAD --quiet -- $(git diff --name-only master...HEAD); then
             echo "new_changes=true" >> $GITHUB_ENV
