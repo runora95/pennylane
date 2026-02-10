@@ -27,7 +27,7 @@ jobs:
       # Checks-out the PennyLane repository
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: master
 
       # Create a new branch at from the current main to be used in the PR
       - name: Create temp branch
