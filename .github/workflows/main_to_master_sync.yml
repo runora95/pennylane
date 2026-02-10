@@ -31,7 +31,6 @@ jobs:
 
       # Create a new branch at from the current rc to be used in the PR
       - name: Create temp branch
-        if: ${{ env.branch_exists == 'true' }}
         run: |
           git fetch
           git checkout "${{ env.rc_branch }}"
