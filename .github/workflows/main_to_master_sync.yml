@@ -48,7 +48,6 @@ jobs:
 
       # Create PR to master
       - name: Create pull request
-        if: ${{ env.new_changes == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
