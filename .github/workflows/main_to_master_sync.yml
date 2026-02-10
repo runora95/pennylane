@@ -51,7 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}
         run: |
-          git checkout master
+          git checkout ${{ env.tmp_branch }}
           gh pr create --repo runora95/pennylane --title "Daily master sync to main" --body "" --base master 
-          git merge ${{ env.tmp_branch }}
-          git push --force
+          # git merge ${{ env.tmp_branch }}
+          # git push --force
