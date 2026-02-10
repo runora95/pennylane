@@ -56,4 +56,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git checkout ${{ env.tmp_branch }}
-          gh pr create --repo runora95/pennylane --title "Daily master sync to main" --body "" 
+          gh pr create --repo runora95/pennylane --title "Daily master sync to main" --body "" --base master --head ${{ env.tmp_branch }}
