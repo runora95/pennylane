@@ -29,7 +29,7 @@ jobs:
         with:
           ref: main
 
-      # Create a new branch at from the current rc to be used in the PR
+      # Create a new branch at from the current main to be used in the PR
       - name: Create temp branch
         run: |
           git fetch
@@ -37,14 +37,11 @@ jobs:
           BRANCH="main_$(date +'%Y-%m-%d-%H-%M-%S')"
           echo "tmp_branch=$BRANCH" >> $GITHUB_ENV
           git checkout -b "$BRANCH"
-          # Exclude some files known to be divergent during the release process from the PR
-          git checkout main -- pennylane/_version.py
-          git checkout main -- doc/development/release_notes.md
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"
           git commit -m "exclude files from pr"
           # check for new changes on the rc branch only, based on the diff between master and main
-          if ! git diff main HEAD --quiet -- $(git diff --name-only main...HEAD); then
+          if ! git diff master HEAD --quiet -- $(git diff --name-only master...HEAD); then
             echo "new_changes=true" >> $GITHUB_ENV
             git push --set-upstream origin "$BRANCH"
           fi
