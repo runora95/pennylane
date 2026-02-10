@@ -4,7 +4,7 @@
 # as declared in pennylane/_version.py, that is if the branch "v0.23.0-rc0" exists while
 # the package version is "v0.24.0-dev".
 
-name: Sync release candidate with master
+name: Sync main to master
 
 # Controls when the workflow will run
 on:
