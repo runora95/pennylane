@@ -53,5 +53,6 @@ jobs:
         run: |
           git checkout ${{ env.tmp_branch }}
           gh pr create --repo runora95/pennylane --title "Daily master sync to main" --body "" --base master 
+          gh pr merge --squash
           # git merge ${{ env.tmp_branch }}
           # git push --force
