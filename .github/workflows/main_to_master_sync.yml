@@ -32,7 +32,7 @@ jobs:
       # Create a new branch at from the current main to be used in the PR
       - name: Create temp branch
         run: |
-          git fetch
+          git fetch 
           git checkout main
           BRANCH="main_$(date +'%Y-%m-%d-%H-%M-%S')"
           echo "tmp_branch=$BRANCH" >> $GITHUB_ENV
@@ -49,7 +49,7 @@ jobs:
       # Create PR to master
       - name: Create pull request
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}
         run: |
           git checkout ${{ env.tmp_branch }}
           gh pr create --repo runora95/pennylane --title "Daily master sync to main" --body "" --base master 
