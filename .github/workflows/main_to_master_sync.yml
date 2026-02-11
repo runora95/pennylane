@@ -32,7 +32,7 @@ jobs:
       # Create a new branch at from the current main to be used in the PR
       - name: Create temp branch
         run: |
-          git fetch
+          git fetch 
           git checkout main
           BRANCH="main_$(date +'%Y-%m-%d-%H-%M-%S')"
           echo "tmp_branch=$BRANCH" >> $GITHUB_ENV
