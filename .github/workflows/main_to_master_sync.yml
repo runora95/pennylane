@@ -31,7 +31,7 @@ jobs:
 
       - name: Sync main to master
         run: |
-          git fetch origin main:main
+          git fetch origin 
           if git merge --no-commit --no-ff main; then
             echo "No changes to sync from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
