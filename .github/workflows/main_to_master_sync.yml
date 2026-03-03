@@ -36,11 +36,10 @@ jobs:
             echo "No changes to sync from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
             echo "has_changes=$(git diff HEAD~1 --quiet && echo 'false' || echo 'true')" >> $GITHUB_ENV
-            exit 0
           else
             echo "Merge conflict detected. Creating a PR ..."
             echo "merge_conflict=true" >> $GITHUB_ENV
-            exit 1
+            git merge --abort || true 
           fi
 
       # Create a new branch at from the current main to be used in the PR
