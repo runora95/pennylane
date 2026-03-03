@@ -31,7 +31,7 @@ jobs:
 
       - name: Sync main to master
         run: |
-          git fetch origin main:main
+          git fetch origin master:master
           if git merge --no-commit --no-ff main; then
             echo "No changes to sync from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
@@ -54,8 +54,10 @@ jobs:
           git checkout -b "$BRANCH"
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"
-          if ! git diff master HEAD --quiet -- $(git diff --name-only master...HEAD); then
+          if ! git diff --quiet origin/master origin/main; then
             echo "new_changes=true" >> $GITHUB_ENV
             git push --set-upstream origin "$BRANCH"
             gh pr create --repo runora95/pennylane --title "Daily master sync to main conflict PR" --body "" --base master 
+          else
+            echo "No changes to sync from main to master."
           fi
