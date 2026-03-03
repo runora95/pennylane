@@ -27,32 +27,36 @@ jobs:
       # Checks-out the PennyLane repository
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: master
+
+      - name: Sync main to master
+        run: |
+          git fetch origin main:main
+          if git merge --no-commit --no-ff main; then
+            echo "No changes to sync from main to master."
+            echo "merge_conflict=false" >> $GITHUB_ENV
+            echo "has_changes=$(git diff HEAD~1 --quiet && echo 'false' || echo 'true')" >> $GITHUB_ENV
+            exit 0
+          else
+            echo "Merge conflict detected. Creating a PR ..."
+            echo "merge_conflict=true" >> $GITHUB_ENV
+            exit 1
+          fi
 
       # Create a new branch at from the current main to be used in the PR
       - name: Create temp branch
+        env:
+          GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}      
+        if: env.merge_conflict == 'true'
         run: |
-          git fetch 
           git checkout main
           BRANCH="main_$(date +'%Y-%m-%d-%H-%M-%S')"
           echo "tmp_branch=$BRANCH" >> $GITHUB_ENV
           git checkout -b "$BRANCH"
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"
-          # git commit -m "exclude files from pr"
-          # check for new changes on the rc branch only, based on the diff between master and main
           if ! git diff master HEAD --quiet -- $(git diff --name-only master...HEAD); then
             echo "new_changes=true" >> $GITHUB_ENV
             git push --set-upstream origin "$BRANCH"
+            gh pr create --repo runora95/pennylane --title "Daily master sync to main conflict PR" --body "" --base master 
           fi
-
-      # Create PR to master
-      - name: Create pull request
-        env:
-          GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}
-        run: |
-          git checkout ${{ env.tmp_branch }}
-          gh pr create --repo runora95/pennylane --title "Daily master sync to main" --body "" --base master 
-          gh pr merge --squash --admin
-          # git merge ${{ env.tmp_branch }}
-          # git push --force
