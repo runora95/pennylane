@@ -32,7 +32,7 @@ jobs:
 
       - name: Sync main to master
         run: |
-          git fetch origin
+          git fetch origin 
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"          
           if git merge --no-commit --no-ff origin/main; then
