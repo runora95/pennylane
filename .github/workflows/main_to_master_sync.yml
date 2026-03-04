@@ -32,10 +32,10 @@ jobs:
       - name: Sync main to master
         run: |
           git fetch origin
-          if git merge --no-commit --no-ff main; then
+          if git merge --no-commit --no-ff origin/main; then
             echo "No changes to sync from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
-            git push origin/master 
+            git push origin master 
             echo "has_changes=$(git diff HEAD~1 --quiet && echo 'false' || echo 'true')" >> $GITHUB_ENV
           else
             echo "Merge conflict detected. Creating a PR ..."
