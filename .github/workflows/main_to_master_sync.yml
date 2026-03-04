@@ -30,12 +30,14 @@ jobs:
           ref: master
 
       - name: Sync main to master
+        env:
+          GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}        
         run: |
           git fetch origin
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"          
           if git merge --no-commit --no-ff origin/main; then
-            echo "No changes to sync from main to master."
+            echo "Synching from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
             git commit -m "Sync main to master"
             git push origin master 
@@ -47,9 +49,7 @@ jobs:
           fi
 
       # Create a new branch at from the current main to be used in the PR
-      - name: Create temp branch
-        env:
-          GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}      
+      - name: Create temp branch 
         if: env.merge_conflict == 'true'
         run: |
           git checkout main
