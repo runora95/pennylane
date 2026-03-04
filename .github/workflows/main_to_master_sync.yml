@@ -50,6 +50,8 @@ jobs:
       # Create a new branch at from the current main to be used in the PR
       - name: Create temp branch 
         # if: env.merge_conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PENNYLANE_RUNORA_WRITE_TOKEN }}
         run: |
           git checkout main
           BRANCH="main_$(date +'%Y-%m-%d-%H-%M-%S')"
