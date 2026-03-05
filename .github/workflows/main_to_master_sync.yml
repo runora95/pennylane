@@ -62,7 +62,7 @@ jobs:
           if ! git diff --quiet origin/master origin/main; then
             echo "new_changes=true" >> $GITHUB_ENV
             git push --set-upstream origin "$BRANCH"
-            gh pr create --repo runora95/pennylane --title "Daily master sync to main conflict PR" --body "" --base master 
+            gh pr create --repo runora95/pennylane --title "[no ci] Daily master sync to main conflict PR" --body "" --base master 
           else
             echo "No changes to sync from main to master."
           fi
