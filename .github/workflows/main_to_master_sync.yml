@@ -38,7 +38,6 @@ jobs:
           if git merge --no-commit --ff-only origin/main; then
             echo "Synching from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
-            git commit -m "Sync main to master"
             git push origin master  
             echo "has_changes=$(git diff HEAD~1 --quiet && echo 'false' || echo 'true')" >> $GITHUB_ENV
           else
