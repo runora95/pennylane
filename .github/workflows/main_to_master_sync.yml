@@ -35,7 +35,7 @@ jobs:
           git fetch origin 
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"          
-          if git merge --no-commit --no-ff origin/main; then
+          if git merge --no-commit --ff-only origin/main; then
             echo "Synching from main to master."
             echo "merge_conflict=false" >> $GITHUB_ENV
             git commit -m "Sync main to master"
