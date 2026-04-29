@@ -13,6 +13,9 @@
 # The workflow utilizes the GitHub CLI (gh) to interact with the GitHub API for creating the pull request.
 
 name: Check in Artifact
+permissions:
+  contents: write
+  pull-requests: write
 on:
   workflow_call:
     inputs:

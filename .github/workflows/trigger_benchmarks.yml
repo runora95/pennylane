@@ -4,6 +4,10 @@ on:
     types:
       - created
 
+permissions:
+  contents: read
+  issues: write
+
 env:
   BENCHMARK_TRIGGER_COMMAND: /benchmark
 

@@ -18,6 +18,9 @@ on:
 env:
   UV_SYSTEM_PYTHON: 1
 
+permissions:
+  contents: write
+  pull-requests: write
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job to sync the main branch with changes from the rc
