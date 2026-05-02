@@ -14,6 +14,7 @@
 """
 This module contains the template for the Fast Approximate BLock Encoding (FABLE) technique.
 """
+
 # pylint: disable=no-value-for-parameter
 import warnings
 from collections import Counter
@@ -55,16 +56,16 @@ class FABLE(Operation):
     .. code-block:: python
 
         input_matrix = np.array([[0.1, 0.2],[0.3, -0.2]])
-        dev = qml.device('default.qubit', wires=3)
-        @qml.qnode(dev)
+        dev = qp.device('default.qubit', wires=3)
+        @qp.qnode(dev)
         def example_circuit():
-            qml.FABLE(input_matrix, wires=range(3), tol=0)
-            return qml.state()
+            qp.FABLE(input_matrix, wires=range(3), tol=0)
+            return qp.state()
 
     We can see that the input matrix has been block encoded in the matrix of the circuit:
 
-    >>> s = int(np.ceil(np.log2(max(len(input_matrix), len(input_matrix[0])))))
-    >>> expected = 2**s * qml.matrix(example_circuit)().real[0 : 2**s, 0 : 2**s]
+    >>> s = qp.math.ceil_log2(max(len(input_matrix), len(input_matrix[0])))
+    >>> expected = 2**s * qp.matrix(example_circuit)().real[0 : 2**s, 0 : 2**s]
     >>> print(f"Block-encoded matrix:\n{expected}")
     Block-encoded matrix:
     [[ 0.1  0.2]
@@ -114,7 +115,7 @@ class FABLE(Operation):
             dimension = max(row, col)
             input_matrix = math.pad(input_matrix, ((0, dimension - row), (0, dimension - col)))
             row, col = math.shape(input_matrix)
-        n = int(math.ceil(math.log2(col)))
+        n = math.ceil_log2(col)
         if n == 0:  ### For edge case where someone puts a 1x1 array.
             n = 1
         if col < 2**n:

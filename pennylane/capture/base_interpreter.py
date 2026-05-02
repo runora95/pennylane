@@ -14,6 +14,7 @@
 """
 This submodule defines a strategy structure for defining custom plxpr interpreters
 """
+
 # pylint: disable=no-self-use
 
 from collections.abc import Callable, Sequence
@@ -24,7 +25,7 @@ from importlib.metadata import version
 import jax
 from packaging.version import Version
 
-import pennylane as qml
+import pennylane as qp
 from pennylane import math
 
 from .flatfn import FlatFn
@@ -34,7 +35,10 @@ from .primitives import (
     ctrl_transform_prim,
     for_loop_prim,
     jacobian_prim,
+    jvp_prim,
     qnode_prim,
+    quantum_subroutine_prim,
+    value_and_grad_prim,
     vjp_prim,
     while_loop_prim,
 )
@@ -57,7 +61,7 @@ def _fill_in_shape_with_dyn_shape(dyn_shape: tuple["jax.core.Tracer"], shape: tu
     When capturing `broadcast_in_dim_p` with a dynamic shape, we might end up with:
     ```
     >>> import jax
-    >>> qml.capture.enable()
+    >>> qp.capture.enable()
     >>> jax.config.update("jax_dynamic_shapes", True)
     >>> def f(n):
     ...     return jax.numpy.ones((n, 4, n))
@@ -86,7 +90,7 @@ def _fill_in_shape_with_dyn_shape(dyn_shape: tuple["jax.core.Tracer"], shape: tu
         else:  # pragma: no cover
             # pull from iterable of dynamic shapes
             next_s = next(dyn_shape_iter)
-            if not qml.math.is_abstract(next_s):
+            if not qp.math.is_abstract(next_s):
                 # may need to cast to a built-in integer if possible
                 next_s = int(next_s)
             new_shape.append(next_s)
@@ -117,7 +121,7 @@ class PlxprInterpreter:
         class SimplifyInterpreter(PlxprInterpreter):
 
             def interpret_operation(self, op):
-                new_op = qml.simplify(op)
+                new_op = qp.simplify(op)
                 if new_op is op:
                     # simplify didn't create a new operator, so it didn't get captured
                     data, struct = jax.tree_util.tree_flatten(new_op)
@@ -133,14 +137,14 @@ class PlxprInterpreter:
 
     Now the interpreter can be used to transform functions and jaxpr:
 
-    >>> qml.capture.enable()
+    >>> qp.capture.enable()
     >>> interpreter = SimplifyInterpreter()
     >>> def f(x):
-    ...     qml.RX(x, 0)**2
-    ...     qml.adjoint(qml.Z(0))
-    ...     return qml.expval(qml.X(0) + qml.X(0))
+    ...     qp.RX(x, 0)**2
+    ...     qp.adjoint(qp.Z(0))
+    ...     return qp.expval(qp.X(0) + qp.X(0))
     >>> simplified_f = interpreter(f)
-    >>> print(qml.draw(simplified_f)(0.5))
+    >>> print(qp.draw(simplified_f)(0.5))
     0: ──RX(1.00)──Z─┤  <2.00*X>
     >>> jaxpr = jax.make_jaxpr(f)(0.5)
     >>> interpreter.eval(jaxpr.jaxpr, [], 0.5)
@@ -157,12 +161,12 @@ class PlxprInterpreter:
     the compact structure of the jaxpr and reduces the size of the program. This behavior is the default.
 
     >>> def g(x):
-    ...     @qml.for_loop(3)
+    ...     @qp.for_loop(3)
     ...     def loop(i, x):
-    ...         qml.RX(x, 0) ** i
+    ...         qp.RX(x, 0) ** i
     ...         return x
     ...     loop(1.0)
-    ...     return qml.expval(qml.Z(0) + 3*qml.Z(0))
+    ...     return qp.expval(qp.Z(0) + 3*qp.Z(0))
     >>> jax.make_jaxpr(interpreter(g))(0.5)
     { lambda ; a:f32[]. let
         _:f32[] = for_loop[
@@ -198,7 +202,7 @@ class PlxprInterpreter:
             def interpret_operation(self, op):
                 self.ops.append(op)
 
-        @AccumulateOps.register_primitive(qml.capture.primitives.for_loop_prim)
+        @AccumulateOps.register_primitive(qp.capture.primitives.for_loop_prim)
         def _(self, start, stop, step, *invals, jaxpr_body_fn, consts_slice, args_slice):
             consts = invals[consts_slice]
             state = invals[args_slice]
@@ -207,9 +211,9 @@ class PlxprInterpreter:
                 state = copy.copy(self).eval(jaxpr_body_fn, consts, i, *state)
             return state
 
-    >>> @qml.for_loop(3)
+    >>> @qp.for_loop(3)
     ... def loop(i, x):
-    ...     qml.RX(x, i)
+    ...     qp.RX(x, i)
     ...     return x
     >>> accumulator = AccumulateOps()
     >>> accumulator(loop)(0.5)
@@ -226,8 +230,9 @@ class PlxprInterpreter:
     def __init_subclass__(cls) -> None:
         cls._primitive_registrations = copy(cls._primitive_registrations)
 
-    def __init__(self):
+    def __init__(self, *, subroutine_cache=None):
         self._env = {}
+        self.subroutine_cache = subroutine_cache or {}
 
     @classmethod
     def register_primitive(
@@ -309,7 +314,7 @@ class PlxprInterpreter:
 
         """
         invals = (self.read(invar) for invar in eqn.invars)
-        with qml.QueuingManager.stop_recording():
+        with qp.QueuingManager.stop_recording():
             op = eqn.primitive.impl(*invals, **eqn.params)
         if isinstance(eqn.outvars[0], jax.core.DropVar):
             return self.interpret_operation(op)
@@ -325,11 +330,11 @@ class PlxprInterpreter:
 
         """
         invals = (self.read(invar) for invar in eqn.invars)
-        with qml.QueuingManager.stop_recording():
+        with qp.QueuingManager.stop_recording():
             mp = eqn.primitive.impl(*invals, **eqn.params)
         return self.interpret_measurement(mp)
 
-    def interpret_measurement(self, measurement: "qml.measurement.MeasurementProcess"):
+    def interpret_measurement(self, measurement: "qp.measurement.MeasurementProcess"):
         """Interpret a measurement process instance.
 
         Args:
@@ -386,7 +391,7 @@ class PlxprInterpreter:
         outvals = []
         for var in jaxpr.outvars:
             outval = self.read(var)
-            if isinstance(outval, qml.operation.Operator):
+            if isinstance(outval, qp.operation.Operator):
                 outvals.append(self.interpret_operation(outval))
             else:
                 outvals.append(outval)
@@ -400,7 +405,7 @@ class PlxprInterpreter:
 
         @wraps(f)
         def wrapper(*args, **kwargs):
-            with qml.QueuingManager.stop_recording():
+            with qp.QueuingManager.stop_recording():
                 jaxpr = jax.make_jaxpr(partial(flat_f, **kwargs))(*args)
 
             flat_args = jax.tree_util.tree_leaves(args)
@@ -419,7 +424,7 @@ def _(self, x, *dyn_shape, shape, broadcast_dimensions, sharding):
     """Handle the broadcast_in_dim primitive created by jnp.ones, jnp.zeros, jnp.full
 
     >>> import jax
-    >>> qml.capture.enable()
+    >>> qp.capture.enable()
     >>> jax.config.update("jax_dynamic_shapes", True)
     >>> def f(n):
     ...     return jax.numpy.ones((n, 4, n))
@@ -446,7 +451,7 @@ def _iota_primitive(self, *dyn_shape, dimension, dtype, shape, sharding):
     """Handle the iota primitive created by jnp.arange
 
     >>> import jax
-    >>> qml.capture.enable()
+    >>> qp.capture.enable()
     >>> jax.config.update("jax_dynamic_shapes", True)
     >>> def f(n):
     ...     return jax.numpy.arange(n)
@@ -619,6 +624,17 @@ def handle_qnode(self, *invals, shots_len, qnode, device, execution_config, qfun
     )
 
 
+@PlxprInterpreter.register_primitive(quantum_subroutine_prim)
+def _quantum_subroutine(self, *invals, jaxpr, **params):
+    if jaxpr in self.subroutine_cache:
+        new_jaxpr = self.subroutine_cache[jaxpr]
+    else:
+        new_jaxpr = jaxpr_to_jaxpr(copy(self), jaxpr.jaxpr, jaxpr.consts, *invals)
+        self.subroutine_cache[jaxpr] = new_jaxpr
+
+    return quantum_subroutine_prim.bind(*invals, jaxpr=new_jaxpr, **params)
+
+
 @PlxprInterpreter.register_primitive(jacobian_prim)
 def handle_jacobian(self, *invals, jaxpr, n_consts, **params):
     """Handle the jacobian primitive."""
@@ -630,9 +646,24 @@ def handle_jacobian(self, *invals, jaxpr, n_consts, **params):
     )
 
 
+@PlxprInterpreter.register_primitive(value_and_grad_prim)
+def handle_value_and_grad(self, *invals, jaxpr, argnums, **params):
+    """Handle the value_and_grad primitive."""
+
+    new_jaxpr = jaxpr_to_jaxpr(copy(self), jaxpr, [], *invals[: len(jaxpr.invars)])
+
+    j = new_jaxpr.jaxpr
+    no_consts_jaxpr = j.replace(constvars=(), invars=j.constvars + j.invars)
+    argnums = tuple(a + len(j.constvars) for a in argnums)
+
+    return value_and_grad_prim.bind(
+        *new_jaxpr.consts, *invals, jaxpr=no_consts_jaxpr, argnums=argnums, **params
+    )
+
+
 @PlxprInterpreter.register_primitive(vjp_prim)
 def handle_vjp(self, *invals, jaxpr, argnums, **params):
-    """Handle the jacobian primitive."""
+    """Handle the vector-jacobian-product primitive."""
 
     new_jaxpr = jaxpr_to_jaxpr(copy(self), jaxpr, [], *invals[: len(jaxpr.invars)])
 
@@ -641,6 +672,21 @@ def handle_vjp(self, *invals, jaxpr, argnums, **params):
     argnums = tuple(a + len(j.constvars) for a in argnums)
 
     return vjp_prim.bind(
+        *new_jaxpr.consts, *invals, jaxpr=no_consts_jaxpr, argnums=argnums, **params
+    )
+
+
+@PlxprInterpreter.register_primitive(jvp_prim)
+def handle_jvp(self, *invals, jaxpr, argnums, **params):
+    """Handle the jacobian-vector-product primitive."""
+
+    new_jaxpr = jaxpr_to_jaxpr(copy(self), jaxpr, [], *invals[: len(jaxpr.invars)])
+
+    j = new_jaxpr.jaxpr
+    no_consts_jaxpr = j.replace(constvars=(), invars=j.constvars + j.invars)
+    argnums = tuple(a + len(j.constvars) for a in argnums)
+
+    return jvp_prim.bind(
         *new_jaxpr.consts, *invals, jaxpr=no_consts_jaxpr, argnums=argnums, **params
     )
 
@@ -667,6 +713,11 @@ def _pjit_primitive(self, *invals, jaxpr, **params):
 
     subfuns, params = pjit_p.get_bind_params({"jaxpr": jaxpr, **params})
     return pjit_p.bind(*subfuns, *invals, **params)
+
+
+@FlattenedInterpreter.register_primitive(quantum_subroutine_prim)
+def _quantum_subroutine_eval(self, *invals, jaxpr, **params):
+    return copy(self).eval(jaxpr.jaxpr, jaxpr.consts, *invals)
 
 
 @FlattenedInterpreter.register_primitive(while_loop_prim)
@@ -770,7 +821,7 @@ def eval_jaxpr(jaxpr: "jax.extend.core.Jaxpr", consts: list, *args) -> list:
     >>> def f(i):
     ...     return jax.numpy.arange(i)
     >>> jaxpr = jax.make_jaxpr(f)(3)
-    >>> qml.capture.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, 2)
+    >>> qp.capture.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, 2)
     [Array([0, 1], dtype=int32)]
     >>> jax.core.eval_jaxpr(jaxpr.jaxpr, jaxpr.consts, 2)
     XlaRuntimeError: error: 'mhlo.dynamic_iota' op can't be translated to XLA HLO

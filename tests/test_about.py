@@ -14,6 +14,7 @@
 """
 Unit tests for the :mod:`pennylane` configuration classe :class:`Configuration`.
 """
+
 # pylint: disable=protected-access
 
 import contextlib
@@ -24,7 +25,7 @@ import re
 
 import pytest
 
-import pennylane as qml
+import pennylane as qp
 
 
 @pytest.mark.slow
@@ -34,7 +35,7 @@ def test_about():
     """
     f = io.StringIO()
     with contextlib.redirect_stdout(f):
-        qml.about()
+        qp.about()
     out = f.getvalue().strip()
 
     assert "Version:" in out
@@ -42,7 +43,7 @@ def test_about():
     # 0.43.0-rc0 -> 0.43.0rc0
     # 0.43.0-dev0 -> 0.43.0.dev0
     is_rc_version = "rc" in pl_version_match
-    assert qml.version().replace("-", "" if is_rc_version else ".") in pl_version_match
+    assert qp.version().replace("-", "" if is_rc_version else ".") in pl_version_match
     assert "Numpy version" in out
     assert "Scipy version" in out
     assert "default.qubit" in out
@@ -80,3 +81,19 @@ def test_about_shows_editable_location(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Editable project location: /tmp/pl" in out
     assert re.search(r"Location:\s*/site-packages/pennylane", out)
+
+
+def test_catalyst_version(monkeypatch):
+    """Tests the catalyst_version function."""
+    about = importlib.import_module("pennylane.about")
+
+    # Test when catalyst is not found
+    monkeypatch.setattr(about, "find_spec", lambda name: None if name == "catalyst" else True)
+    assert about.catalyst_version() is None
+
+    # Test when catalyst is found but version is not available
+    monkeypatch.setattr(about, "find_spec", lambda name: True)
+    monkeypatch.setattr(
+        about, "version", lambda name: "0.1.0" if name == "pennylane_catalyst" else None
+    )
+    assert about.catalyst_version() == "0.1.0"

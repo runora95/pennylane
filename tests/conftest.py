@@ -14,17 +14,20 @@
 """
 Pytest configuration file for PennyLane test suite.
 """
+
 # pylint: disable=unused-import
 import os
 import pathlib
 import sys
+import warnings
 
 import numpy as np
 import pytest
 from packaging.version import Version
 
-import pennylane as qml
+import pennylane as qp
 from pennylane.devices import DefaultGaussian
+from pennylane.exceptions import PennyLaneDeprecationWarning
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "helpers"))
 
@@ -40,6 +43,18 @@ class DummyDevice(DefaultGaussian):
 
     _operation_map = DefaultGaussian._operation_map.copy()
     _operation_map["Kerr"] = lambda *x, **y: np.identity(2)
+
+
+@pytest.fixture
+def ignore_id_deprecation():
+    """Fixture to suppress PennyLaneDeprecationWarning for 'id' tests."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=PennyLaneDeprecationWarning,
+            message="The 'id' argument is deprecated",
+        )
+        yield
 
 
 @pytest.fixture(scope="session")
@@ -74,7 +89,7 @@ def n_subsystems_fixture(request):
 
 @pytest.fixture(scope="session")
 def qubit_device(n_subsystems):
-    return qml.device("default.qubit", wires=n_subsystems)
+    return qp.device("default.qubit", wires=n_subsystems)
 
 
 # The following 3 fixtures are for default.qutrit devices to be used
@@ -83,17 +98,17 @@ def qubit_device(n_subsystems):
 
 @pytest.fixture(scope="function", params=[(np.float32, np.complex64), (np.float64, np.complex128)])
 def qutrit_device_1_wire(request):
-    return qml.device("default.qutrit", wires=1, r_dtype=request.param[0], c_dtype=request.param[1])
+    return qp.device("default.qutrit", wires=1, r_dtype=request.param[0], c_dtype=request.param[1])
 
 
 @pytest.fixture(scope="function", params=[(np.float32, np.complex64), (np.float64, np.complex128)])
 def qutrit_device_2_wires(request):
-    return qml.device("default.qutrit", wires=2, r_dtype=request.param[0], c_dtype=request.param[1])
+    return qp.device("default.qutrit", wires=2, r_dtype=request.param[0], c_dtype=request.param[1])
 
 
 @pytest.fixture(scope="function", params=[(np.float32, np.complex64), (np.float64, np.complex128)])
 def qutrit_device_3_wires(request):
-    return qml.device("default.qutrit", wires=3, r_dtype=request.param[0], c_dtype=request.param[1])
+    return qp.device("default.qutrit", wires=3, r_dtype=request.param[0], c_dtype=request.param[1])
 
 
 #######################################################################
@@ -104,26 +119,26 @@ def mock_device(monkeypatch):
     """A mock instance of the abstract Device class"""
 
     with monkeypatch.context() as m:
-        dev = qml.devices.LegacyDevice
+        dev = qp.devices.LegacyDevice
         m.setattr(dev, "__abstractmethods__", frozenset())
         m.setattr(dev, "short_name", "mock_device")
         m.setattr(dev, "capabilities", lambda cls: {"model": "qubit"})
         m.setattr(dev, "operations", {"RX", "RY", "RZ", "CNOT", "SWAP"})
-        yield qml.devices.LegacyDevice(wires=2)  # pylint:disable=abstract-class-instantiated
+        yield qp.devices.LegacyDevice(wires=2)  # pylint:disable=abstract-class-instantiated
 
 
 # pylint: disable=protected-access
 @pytest.fixture
 def tear_down_hermitian():
     yield None
-    qml.Hermitian._eigs = {}
+    qp.Hermitian._eigs = {}
 
 
 # pylint: disable=protected-access
 @pytest.fixture
 def tear_down_thermitian():
     yield None
-    qml.THermitian._eigs = {}
+    qp.THermitian._eigs = {}
 
 
 @pytest.fixture(autouse=True)
@@ -164,11 +179,11 @@ def seed(request):
 @pytest.fixture(scope="function")
 def enable_disable_plxpr():
     """enable and disable capture around each test."""
-    qml.capture.enable()
+    qp.capture.enable()
     try:
         yield
     finally:
-        qml.capture.disable()
+        qp.capture.disable()
 
 
 @pytest.fixture(scope="function")
@@ -195,25 +210,30 @@ def enable_disable_dynamic_shapes():
 @pytest.fixture(scope="function")
 def enable_graph_decomposition():
     """enable and disable graph-decomposition around each test."""
-    enabled = qml.decomposition.enabled_graph()
-    qml.decomposition.enable_graph()
-    try:
+    with qp.decomposition.toggle_graph_ctx(True):
         yield
-    finally:
-        if not enabled:
-            qml.decomposition.disable_graph()
 
 
 @pytest.fixture(scope="function")
 def disable_graph_decomposition():
     """disable graph-decomposition."""
-    enabled = qml.decomposition.enabled_graph()
-    qml.decomposition.disable_graph()
-    try:
+    with qp.decomposition.toggle_graph_ctx(False):
         yield
-    finally:
-        if enabled:
-            qml.decomposition.enable_graph()
+
+
+@pytest.fixture(params=[False, True], ids=["graph_disabled", "graph_enabled"])
+def enable_and_disable_graph_decomp(request):
+    """
+    A fixture that parametrizes a test to run twice: once with graph
+    decomposition disabled and once with it enabled.
+
+    It automatically handles the setup (enabling/disabling) before the
+    test runs and the teardown (always disabling) after the test completes.
+
+    """
+    use_graph_decomp = request.param
+    with qp.decomposition.toggle_graph_ctx(use_graph_decomp):
+        yield
 
 
 #######################################################################
@@ -297,7 +317,7 @@ def pytest_collection_modifyitems(items, config):
         ):
             item.add_marker(pytest.mark.core)
         if "capture" in markers:
-            item.fixturenames.append("enable_disable_plxpr")
+            item.fixturenames = [*item.fixturenames, "enable_disable_plxpr"]
             if "jax" not in markers:
                 item.add_marker(pytest.mark.jax)
 
@@ -334,37 +354,3 @@ def pytest_runtest_setup(item):
                 pytest.skip(
                     f"\nTest {item.nodeid} only runs with {allowed_interfaces} interfaces(s) but {b} interface provided",
                 )
-
-
-@pytest.fixture(params=[False, True], ids=["graph_disabled", "graph_enabled"])
-def enable_and_disable_graph_decomp(request):
-    """
-    A fixture that parametrizes a test to run twice: once with graph
-    decomposition disabled and once with it enabled.
-
-    It automatically handles the setup (enabling/disabling) before the
-    test runs and the teardown (always disabling) after the test completes.
-    """
-    enabled = qml.decomposition.enabled_graph()
-    try:
-        use_graph_decomp = request.param
-
-        # --- Setup Phase ---
-        # This code runs before the test function is executed.
-        if use_graph_decomp:
-            qml.decomposition.enable_graph()
-        else:
-            # Explicitly disable to ensure a clean state
-            qml.decomposition.disable_graph()
-
-        # Yield control to the test function
-        yield use_graph_decomp
-
-    finally:
-        # --- Teardown Phase ---
-        # This code runs after the test function has finished,
-        # regardless of whether it passed or failed.
-        if not enabled:
-            qml.decomposition.disable_graph()
-        else:
-            qml.decomposition.disable_graph()

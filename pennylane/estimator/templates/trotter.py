@@ -36,6 +36,7 @@ from pennylane.estimator.resource_operator import (
     resource_rep,
 )
 from pennylane.estimator.wires_manager import Allocate, Deallocate
+from pennylane.math import ceil_log2
 from pennylane.wires import Wires, WiresLike
 
 from .subroutines import (
@@ -1058,14 +1059,14 @@ class TrotterVibrational(ResourceOperator):
         allocated wires: 75
              zero state: 75
              any state: 0
-     Total gates : 1.239E+5
-      'Toffoli': 2.248E+4,
+     Total gates : 2.195E+5
+      'Toffoli': 4.160E+4,
       'T': 749,
-      'CNOT': 3.520E+4,
+      'CNOT': 5.432E+4,
       'X': 1.216E+3,
       'Z': 1,
       'S': 1,
-      'Hadamard': 6.422E+4
+      'Hadamard': 1.216E+5
     """
 
     resource_keys = {
@@ -1268,7 +1269,7 @@ class TrotterVibrational(ResourceOperator):
         # Shifted QFT for kinetic part
 
         t = T.resource_rep()
-        gate_lst.append(GateCount(t, num_rep * (num_modes * int(np.ceil(np.log2(num_modes) - 1)))))
+        gate_lst.append(GateCount(t, num_rep * num_modes * (ceil_log2(num_modes) - 1)))
 
         kinetic_deg = 2
         cached_tree = {index: [] for index in range(1, kinetic_deg + 1)}
@@ -1306,7 +1307,7 @@ class TrotterVibrational(ResourceOperator):
                 )
 
         # Shifted QFT Adjoint
-        gate_lst.append(GateCount(t, num_rep * (num_modes * int(np.ceil(np.log2(num_modes) - 1)))))
+        gate_lst.append(GateCount(t, num_rep * num_modes * (ceil_log2(num_modes) - 1)))
 
         return gate_lst
 
@@ -1486,14 +1487,14 @@ class TrotterVibronic(ResourceOperator):
         allocated wires: 75
              zero state: 75
              any state: 0
-     Total gates : 1.332E+5
-      'Toffoli': 2.320E+4,
+     Total gates : 2.288E+5
+      'Toffoli': 4.232E+4,
       'T': 749,
-      'CNOT': 4.144E+4,
+      'CNOT': 6.056E+4,
       'X': 1.456E+3,
       'Z': 1,
       'S': 1,
-      'Hadamard': 6.638E+4
+      'Hadamard': 1.237E+5
     """
 
     resource_keys = {
@@ -1537,8 +1538,7 @@ class TrotterVibronic(ResourceOperator):
         self.coeff_precision = coeff_precision
 
         self.num_wires = (
-            int(np.ceil(np.log2(vibronic_ham.num_states)))
-            + vibronic_ham.num_modes * vibronic_ham.grid_size
+            ceil_log2(vibronic_ham.num_states) + vibronic_ham.num_modes * vibronic_ham.grid_size
         )
 
         if wires is not None and len(Wires(wires)) != self.num_wires:
@@ -1613,8 +1613,7 @@ class TrotterVibronic(ResourceOperator):
             "coeff_precision": coeff_precision,
         }
         num_wires = (
-            int(np.ceil(np.log2(vibronic_ham.num_states)))
-            + vibronic_ham.num_modes * vibronic_ham.grid_size
+            ceil_log2(vibronic_ham.num_states) + vibronic_ham.num_modes * vibronic_ham.grid_size
         )
         return CompressedResourceOp(cls, num_wires, params)
 
@@ -1715,7 +1714,7 @@ class TrotterVibronic(ResourceOperator):
         gate_lst = []
         # Shifted QFT for kinetic part
         t = T.resource_rep()
-        gate_lst.append(GateCount(t, num_rep * (num_modes * int(np.ceil(np.log2(num_modes) - 1)))))
+        gate_lst.append(GateCount(t, num_rep * num_modes * (ceil_log2(num_modes) - 1)))
 
         kinetic_deg = 2
         cached_tree = {index: [] for index in range(1, kinetic_deg + 1)}
@@ -1765,7 +1764,7 @@ class TrotterVibronic(ResourceOperator):
                 )
 
         # Shifted QFT Adjoint
-        gate_lst.append(GateCount(t, num_rep * (num_modes * int(np.ceil(np.log2(num_modes) - 1)))))
+        gate_lst.append(GateCount(t, num_rep * num_modes * (ceil_log2(num_modes) - 1)))
 
         return gate_lst
 
@@ -1843,7 +1842,7 @@ class TrotterVibronic(ResourceOperator):
         gate_list.append(GateCount(x, num_modes * grid_size))
 
         # electronic state
-        gate_list.append(GateCount(resource_rep(Hadamard), int(np.ceil(np.log2(num_states)))))
+        gate_list.append(GateCount(resource_rep(Hadamard), ceil_log2(num_states)))
 
         if order == 1:
             gate_list += TrotterVibronic._rep_circuit(vibronic_ham, coeff_precision, num_steps)
@@ -1853,7 +1852,7 @@ class TrotterVibronic(ResourceOperator):
             )
 
         # Adjoint for electronic state
-        gate_list.append(GateCount(resource_rep(Hadamard), int(np.ceil(np.log2(num_states)))))
+        gate_list.append(GateCount(resource_rep(Hadamard), ceil_log2(num_states)))
 
         # Adjoint of Basis state prep, implemented only for the first step
         gate_list.append(GateCount(x, num_modes * grid_size))

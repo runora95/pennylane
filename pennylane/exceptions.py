@@ -75,6 +75,7 @@ User Warnings
     ~PennyLaneDeprecationWarning
     ~ExperimentalWarning
     ~AutoGraphWarning
+    ~DecompositionWarning
 
 """  # pragma: no cover
 
@@ -104,7 +105,7 @@ class TransformError(Exception):
 
 
 class ConditionalTransformError(ValueError):
-    """Error for using qml.cond incorrectly"""
+    """Error for using qp.cond incorrectly"""
 
 
 class QueuingError(Exception):
@@ -195,6 +196,10 @@ class AutoGraphWarning(Warning):
 
 class CaptureWarning(Warning):
     """Warnings related to the capture of the program into a condensed PLxPR format."""
+
+
+class DecompositionWarning(Warning):
+    """Warning when a decomposition rule isn't found by the graph."""
 
 
 # =============================================================================

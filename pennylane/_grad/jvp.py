@@ -12,12 +12,127 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Defines qml.jvp
+Defines qp.jvp
 """
 
+from collections.abc import Sequence
+from functools import lru_cache
+from importlib.util import find_spec
 
+from pennylane import capture
 from pennylane.compiler import compiler
 from pennylane.exceptions import CompileError
+
+from .grad import _args_and_argnums, _setup_h, _setup_method
+
+has_jax = find_spec("jax") is not None
+
+
+def _get_shape(x):
+    import jax  # pylint: disable=import-outside-toplevel
+
+    return getattr(x, "shape", jax.numpy.shape(x))
+
+
+# pylint: disable=unused-argument
+@lru_cache
+def _get_jvp_prim():
+    if not has_jax:  # pragma: no cover
+        return None
+
+    import jax  # pylint: disable=import-outside-toplevel
+
+    jvp_prim = capture.QpPrimitive("jvp")
+    jvp_prim.multiple_results = True
+    jvp_prim.prim_type = "higher_order"
+
+    @jvp_prim.def_impl
+    def _jvp_impl(*args, jaxpr, fn, method, h, argnums):
+        params = list(args[: len(jaxpr.invars)])
+        dparams = list(args[len(jaxpr.invars) :])
+
+        for i, p in enumerate(params):
+            if i not in argnums:
+                dparams.insert(i, 0 * p)
+
+        def func(*inner_args):
+            return jax.core.eval_jaxpr(jaxpr, [], *inner_args)
+
+        results, dresults = jax.jvp(func, params, dparams)
+        return (*results, *dresults)
+
+    @jvp_prim.def_abstract_eval
+    def _jvp_abstract_eval(*args, jaxpr, fn, method, h, argnums):
+        return 2 * [v.aval for v in jaxpr.outvars]
+
+    return jvp_prim
+
+
+def _validate_tangents(params, dparams, argnums):
+    from jax._src.api import _dtype  # pylint: disable=import-outside-toplevel
+
+    if len(dparams) != len(argnums):
+        raise TypeError(
+            "number of tangents and number of differentiable parameters in qp.jvp do not "
+            "match; the number of parameters must be equal. "
+            f"Got {len(argnums)} differentiable parameters and so expected "
+            f"as many tangents, but got {len(dparams)} instead."
+        )
+
+    for i, dx in zip(argnums, dparams):
+        x = params[i]
+        if _dtype(x) != _dtype(dx):
+            raise TypeError(
+                "function params and tangents arguments to qp.jvp do not match; "
+                "dtypes must be equal. "
+                f"Got function params dtype {_dtype(x)} and expected tangent dtype "
+                f"to match, but got tangent dtype {_dtype(dx)} instead."
+            )
+
+        if _get_shape(x) != _get_shape(dx):
+            raise ValueError(
+                "qp.jvp called with different function params and tangent "
+                f"shapes; got function params shape {_get_shape(x)} and tangent shape "
+                f"{_get_shape(dx)}"
+            )
+
+
+# pylint: disable=too-many-arguments
+def _capture_jvp(func, params, dparams, *, argnums=None, method=None, h=None):
+    import jax  # pylint: disable=import-outside-toplevel
+    from jax.tree_util import tree_leaves, tree_unflatten  # pylint: disable=import-outside-toplevel
+
+    if not isinstance(params, Sequence):
+        raise ValueError(f"params must be a Sequence in qp.jvp. Got type {type(params)}.")
+    if not isinstance(dparams, Sequence):
+        raise ValueError(f"tangents must be a Sequence in qp.jvp. Got type {type(params)}.")
+
+    h = _setup_h(h)
+    method = _setup_method(method)
+    flat_args, flat_argnums, _, _ = _args_and_argnums(params, argnums)
+    flat_dargs = tree_leaves(dparams)
+
+    _validate_tangents(flat_args, flat_dargs, flat_argnums)
+
+    flat_fn = capture.FlatFn(func)
+    jaxpr = jax.make_jaxpr(flat_fn)(*params)
+    j = jaxpr.jaxpr
+    no_consts_jaxpr = j.replace(constvars=(), invars=j.constvars + j.invars)
+    shifted_argnums = tuple(i + len(jaxpr.consts) for i in flat_argnums)
+
+    prim_kwargs = {
+        "fn": func,
+        "method": method,
+        "h": h,
+        "argnums": shifted_argnums,
+        "jaxpr": no_consts_jaxpr,
+    }
+    out_flat = _get_jvp_prim().bind(*jaxpr.consts, *flat_args, *flat_dargs, **prim_kwargs)
+    flat_results, flat_dresults = out_flat[: len(j.outvars)], out_flat[len(j.outvars) :]
+
+    results = tree_unflatten(flat_fn.out_tree, flat_results)
+    dresults = tree_unflatten(flat_fn.out_tree, flat_dresults)
+    return results, dresults
 
 
 # pylint: disable=too-many-arguments, too-many-positional-arguments
@@ -64,13 +179,13 @@ def jvp(f, params, tangents, method=None, h=None, argnums=None):
 
     .. code-block:: python
 
-        @qml.qjit
+        @qp.qjit
         def jvp(params, tangent):
           def f(x):
               y = [jnp.sin(x[0]), x[1] ** 2, x[0] * x[1]]
               return jnp.stack(y)
 
-          return qml.jvp(f, [params], [tangent])
+          return qp.jvp(f, [params], [tangent])
 
     >>> x = jnp.array([0.1, 0.2])
     >>> tangent = jnp.array([0.3, 0.6])
@@ -85,26 +200,28 @@ def jvp(f, params, tangents, method=None, h=None, argnums=None):
 
     .. code-block:: python
 
-        @qml.qjit
-        @qml.qnode(qml.device("lightning.qubit", wires=2))
+        @qp.qjit
+        @qp.qnode(qp.device("lightning.qubit", wires=2))
         def circuit(n, params):
-            qml.RX(params[n, 0], wires=n)
-            qml.RY(params[n, 1], wires=n)
-            return qml.expval(qml.Z(1))
+            qp.RX(params[n, 0], wires=n)
+            qp.RY(params[n, 1], wires=n)
+            return qp.expval(qp.Z(1))
 
-        @qml.qjit
+        @qp.qjit
         def workflow(primals, tangents):
-            return qml.jvp(circuit, [1, primals], [tangents], argnums=[1])
+            return qp.jvp(circuit, [1, primals], [tangents], argnums=[1])
 
     >>> params = jnp.array([[0.54, 0.3154], [0.654, 0.123]])
     >>> dy = jnp.array([[1.0, 1.0], [1.0, 1.0]])
     >>> workflow(params, dy)
     (Array(0.78766064, dtype=float64), Array(-0.70114352, dtype=float64))
     """
+    if capture.enabled():
+        return _capture_jvp(f, params, tangents, method=method, h=h, argnums=argnums)
 
     if active_jit := compiler.active_compiler():
         available_eps = compiler.AvailableCompilers.names_entrypoints
         ops_loader = available_eps[active_jit]["ops"].load()
         return ops_loader.jvp(f, params, tangents, method=method, h=h, argnums=argnums)
 
-    raise CompileError("Pennylane does not support the JVP function without QJIT.")
+    raise CompileError("PennyLane does not support the JVP function without QJIT.")

@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Unit and integration tests for the compile pipeline."""
-# pylint: disable=no-member
 
+# pylint: disable=no-member, protected-access
+
+from copy import copy
 
 import pytest
 import rustworkx as rx
 
-import pennylane as qml
+import pennylane as qp
 from pennylane.decomposition import gate_sets
 from pennylane.exceptions import QuantumFunctionError
 from pennylane.tape import QuantumScript, QuantumScriptBatch
@@ -30,11 +32,13 @@ from pennylane.transforms.core import (
 )
 from pennylane.transforms.core.compile_pipeline import (
     CotransformCache,
+    ProtectedLevel,
     _apply_postprocessing_stack,
     _batch_postprocessing,
     null_postprocessing,
 )
 from pennylane.typing import PostprocessingFn, Result, ResultBatch
+from tests.capture.capture_utils import extract_ops_and_meas_prims
 
 
 def first_valid_transform(
@@ -47,7 +51,8 @@ def first_valid_transform(
 
 
 def expand_transform(
-    tape: QuantumScript, index: int  # pylint:disable=unused-argument
+    tape: QuantumScript,
+    index: int,  # pylint:disable=unused-argument
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """A valid expand transform."""
     return [tape], lambda x: x
@@ -62,7 +67,7 @@ def second_valid_transform(
     tape2 = tape._ops.pop(index)  # pylint:disable=protected-access
 
     def fn(results):
-        return qml.math.sum(results)
+        return qp.math.sum(results)
 
     return [tape1, tape2], fn
 
@@ -121,14 +126,14 @@ class TestCompilePipelineDunders:
         empty_prog = CompilePipeline()
         assert not empty_prog
 
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
         populated_prog = CompilePipeline((transform1,))
         assert populated_prog
 
     def test_iter_pipeline(self):
         """Test iteration over the compile pipeline."""
         compile_pipeline = CompilePipeline()
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
 
         for _ in range(10):
             compile_pipeline.append(transform1)
@@ -142,9 +147,9 @@ class TestCompilePipelineDunders:
     def test_getitem(self):
         """Tests for the getitem dunder."""
 
-        t0 = BoundTransform(qml.transform(first_valid_transform))
-        t1 = BoundTransform(qml.transform(second_valid_transform))
-        t2 = BoundTransform(qml.transform(informative_transform))
+        t0 = BoundTransform(qp.transform(first_valid_transform))
+        t1 = BoundTransform(qp.transform(second_valid_transform))
+        t2 = BoundTransform(qp.transform(informative_transform))
         pipeline = CompilePipeline([t0, t1, t2])
 
         assert pipeline[0] == t0
@@ -157,21 +162,21 @@ class TestCompilePipelineDunders:
     def test_contains(self):
         """Test that we can check whether a transform or transform container exists in a transform."""
 
-        t0 = BoundTransform(qml.transform(first_valid_transform))
-        t1 = BoundTransform(qml.transform(second_valid_transform))
-        t2 = BoundTransform(qml.transform(informative_transform))
+        t0 = BoundTransform(qp.transform(first_valid_transform))
+        t1 = BoundTransform(qp.transform(second_valid_transform))
+        t2 = BoundTransform(qp.transform(informative_transform))
         pipeline = CompilePipeline([t0, t1, t2])
 
         assert t0 in pipeline
         assert t1 in pipeline
         assert t2 in pipeline
-        assert qml.compile not in pipeline
+        assert qp.compile not in pipeline
 
         assert t0 in pipeline
         assert t1 in pipeline
         assert t2 in pipeline
 
-        t_not = BoundTransform(qml.compile)
+        t_not = BoundTransform(qp.compile)
         assert t_not not in pipeline
 
         assert "a" not in pipeline
@@ -182,72 +187,72 @@ class TestCompilePipelineDunders:
         [
             # container + container -> pipeline with 1 then 2
             pytest.param(
-                BoundTransform(qml.transform(first_valid_transform)),
-                BoundTransform(qml.transform(second_valid_transform)),
+                BoundTransform(qp.transform(first_valid_transform)),
+                BoundTransform(qp.transform(second_valid_transform)),
                 first_valid_transform,
                 second_valid_transform,
                 id="container+container",
             ),
             # dispatcher + dispatcher -> pipeline with 1 then 2
             pytest.param(
-                qml.transform(first_valid_transform),
-                qml.transform(second_valid_transform),
+                qp.transform(first_valid_transform),
+                qp.transform(second_valid_transform),
                 first_valid_transform,
                 second_valid_transform,
                 id="dispatcher+dispatcher",
             ),
             # dispatcher + container -> pipeline with dispatcher then container
             pytest.param(
-                qml.transform(first_valid_transform),
-                BoundTransform(qml.transform(second_valid_transform)),
+                qp.transform(first_valid_transform),
+                BoundTransform(qp.transform(second_valid_transform)),
                 first_valid_transform,
                 second_valid_transform,
                 id="dispatcher+container",
             ),
             # container + dispatcher -> pipeline with container then dispatcher
             pytest.param(
-                BoundTransform(qml.transform(first_valid_transform)),
-                qml.transform(second_valid_transform),
+                BoundTransform(qp.transform(first_valid_transform)),
+                qp.transform(second_valid_transform),
                 first_valid_transform,
                 second_valid_transform,
                 id="container+dispatcher",
             ),
             # pipeline + container -> new pipeline with container at end
             pytest.param(
-                CompilePipeline([BoundTransform(qml.transform(first_valid_transform))]),
-                BoundTransform(qml.transform(second_valid_transform)),
+                CompilePipeline([BoundTransform(qp.transform(first_valid_transform))]),
+                BoundTransform(qp.transform(second_valid_transform)),
                 first_valid_transform,
                 second_valid_transform,
                 id="pipeline+container",
             ),
             # pipeline + dispatcher -> new pipeline with dispatcher at end
             pytest.param(
-                CompilePipeline([BoundTransform(qml.transform(first_valid_transform))]),
-                qml.transform(second_valid_transform),
+                CompilePipeline([BoundTransform(qp.transform(first_valid_transform))]),
+                qp.transform(second_valid_transform),
                 first_valid_transform,
                 second_valid_transform,
                 id="pipeline+dispatcher",
             ),
             # dispatcher + pipeline -> pipeline with dispatcher first, then pipeline contents
             pytest.param(
-                qml.transform(first_valid_transform),
-                CompilePipeline([BoundTransform(qml.transform(second_valid_transform))]),
+                qp.transform(first_valid_transform),
+                CompilePipeline([BoundTransform(qp.transform(second_valid_transform))]),
                 first_valid_transform,
                 second_valid_transform,
                 id="dispatcher+pipeline",
             ),
             # container + pipeline -> pipeline with container first, then pipeline contents
             pytest.param(
-                BoundTransform(qml.transform(first_valid_transform)),
-                CompilePipeline([BoundTransform(qml.transform(second_valid_transform))]),
+                BoundTransform(qp.transform(first_valid_transform)),
+                CompilePipeline([BoundTransform(qp.transform(second_valid_transform))]),
                 first_valid_transform,
                 second_valid_transform,
                 id="container+pipeline",
             ),
             # pipeline + pipeline -> new pipeline with one followed by two
             pytest.param(
-                CompilePipeline([BoundTransform(qml.transform(first_valid_transform))]),
-                CompilePipeline([BoundTransform(qml.transform(second_valid_transform))]),
+                CompilePipeline([BoundTransform(qp.transform(first_valid_transform))]),
+                CompilePipeline([BoundTransform(qp.transform(second_valid_transform))]),
                 first_valid_transform,
                 second_valid_transform,
                 id="pipeline+pipeline",
@@ -266,23 +271,23 @@ class TestCompilePipelineDunders:
         "first, second, expected",
         [
             pytest.param(
-                qml.transform(first_valid_transform, expand_transform=expand_transform),
-                qml.transform(second_valid_transform),
+                qp.transform(first_valid_transform, expand_transform=expand_transform),
+                qp.transform(second_valid_transform),
                 [expand_transform, first_valid_transform, second_valid_transform],
             ),
             pytest.param(
-                qml.transform(first_valid_transform),
-                qml.transform(second_valid_transform, expand_transform=expand_transform),
+                qp.transform(first_valid_transform),
+                qp.transform(second_valid_transform, expand_transform=expand_transform),
                 [first_valid_transform, expand_transform, second_valid_transform],
             ),
             pytest.param(
-                qml.transform(first_valid_transform, expand_transform=expand_transform),
-                CompilePipeline([BoundTransform(qml.transform(second_valid_transform))]),
+                qp.transform(first_valid_transform, expand_transform=expand_transform),
+                CompilePipeline([BoundTransform(qp.transform(second_valid_transform))]),
                 [expand_transform, first_valid_transform, second_valid_transform],
             ),
             pytest.param(
-                CompilePipeline([BoundTransform(qml.transform(second_valid_transform))]),
-                qml.transform(first_valid_transform, expand_transform=expand_transform),
+                CompilePipeline([BoundTransform(qp.transform(second_valid_transform))]),
+                qp.transform(first_valid_transform, expand_transform=expand_transform),
                 [second_valid_transform, expand_transform, first_valid_transform],
             ),
         ],
@@ -298,9 +303,9 @@ class TestCompilePipelineDunders:
     @pytest.mark.parametrize(
         "obj",
         [
-            BoundTransform(qml.transform(first_valid_transform)),
-            qml.transform(first_valid_transform),
-            CompilePipeline([BoundTransform(qml.transform(first_valid_transform))]),
+            BoundTransform(qp.transform(first_valid_transform)),
+            qp.transform(first_valid_transform),
+            CompilePipeline([BoundTransform(qp.transform(first_valid_transform))]),
         ],
         ids=["container", "dispatcher", "pipeline"],
     )
@@ -322,7 +327,7 @@ class TestCompilePipelineDunders:
     def test_multiplication_with_expand_transform(self):
         """Tests that the expand_transform is multiplied with the original transform."""
 
-        result = qml.transform(first_valid_transform, expand_transform=expand_transform) * 3
+        result = qp.transform(first_valid_transform, expand_transform=expand_transform) * 3
         assert len(result) == 6
         for i in range(0, 6, 2):
             assert result[i].tape_transform == expand_transform
@@ -333,8 +338,8 @@ class TestCompilePipelineDunders:
     @pytest.mark.parametrize(
         "obj",
         [
-            qml.transform(first_valid_transform),
-            BoundTransform(qml.transform(first_valid_transform)),
+            qp.transform(first_valid_transform),
+            BoundTransform(qp.transform(first_valid_transform)),
         ],
         ids=["dispatcher", "container"],
     )
@@ -347,8 +352,8 @@ class TestCompilePipelineDunders:
     @pytest.mark.parametrize(
         "obj",
         [
-            qml.transform(first_valid_transform),
-            BoundTransform(qml.transform(first_valid_transform)),
+            qp.transform(first_valid_transform),
+            BoundTransform(qp.transform(first_valid_transform)),
         ],
         ids=["dispatcher", "container"],
     )
@@ -361,9 +366,9 @@ class TestCompilePipelineDunders:
     @pytest.mark.parametrize(
         "obj",
         [
-            qml.transform(first_valid_transform),
-            BoundTransform(qml.transform(first_valid_transform)),
-            CompilePipeline([BoundTransform(qml.transform(first_valid_transform))]),
+            qp.transform(first_valid_transform),
+            BoundTransform(qp.transform(first_valid_transform)),
+            CompilePipeline([BoundTransform(qp.transform(first_valid_transform))]),
         ],
         ids=["dispatcher", "container", "pipeline"],
     )
@@ -380,9 +385,9 @@ class TestCompilePipelineDunders:
     @pytest.mark.parametrize(
         "obj",
         [
-            qml.transform(first_valid_transform),
-            BoundTransform(qml.transform(first_valid_transform)),
-            CompilePipeline([BoundTransform(qml.transform(first_valid_transform))]),
+            qp.transform(first_valid_transform),
+            BoundTransform(qp.transform(first_valid_transform)),
+            CompilePipeline([BoundTransform(qp.transform(first_valid_transform))]),
         ],
         ids=["dispatcher", "container", "pipeline"],
     )
@@ -393,8 +398,8 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_rmul_final_transform_error(self):
         """Test that multiplying a pipeline with a final transform raises an error."""
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
-        transform2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        transform2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         pipeline = CompilePipeline([transform1, transform2])
 
         with pytest.raises(
@@ -405,8 +410,8 @@ class TestCompilePipelineDunders:
 
     def test_add_two_pipelines(self):
         """Test adding two compile pipelines"""
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
-        transform2 = BoundTransform(qml.transform(second_valid_transform))
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        transform2 = BoundTransform(qp.transform(second_valid_transform))
 
         compile_pipeline1 = CompilePipeline()
         compile_pipeline1.append(transform1)
@@ -439,8 +444,8 @@ class TestCompilePipelineDunders:
     def test_add_both_final_compile_pipelines(self):
         """Test that an error is raised if two pipelines are added when both have
         terminal transforms"""
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
-        transform2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        transform2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
 
         compile_pipeline1 = CompilePipeline()
         compile_pipeline1.append(transform1)
@@ -458,8 +463,8 @@ class TestCompilePipelineDunders:
     def test_add_pipelines_with_one_final_transform(self):
         """Test that compile pipelines are added correctly when one of them has a terminal
         transform."""
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
-        transform2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        transform2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
 
         compile_pipeline1 = CompilePipeline()
         compile_pipeline1.append(transform1)
@@ -487,70 +492,47 @@ class TestCompilePipelineDunders:
         assert merged_pipeline2[0].tape_transform is first_valid_transform
 
         assert isinstance(merged_pipeline2[1], BoundTransform)
-        assert merged_pipeline2[1].tape_transform is first_valid_transform
+        assert merged_pipeline2[1].tape_transform is second_valid_transform
 
         assert isinstance(merged_pipeline2[2], BoundTransform)
-        assert merged_pipeline2[2].tape_transform is second_valid_transform
+        assert merged_pipeline2[2].tape_transform is first_valid_transform
 
     @pytest.mark.parametrize(
         "right",
         [
             pytest.param(
-                BoundTransform(qml.transform(second_valid_transform)),
-                id="pipeline+container",
-            ),
-            pytest.param(qml.transform(second_valid_transform), id="pipeline+dispatcher"),
-        ],
-    )
-    def test_pipeline_add_maintains_final_transform_at_end(self, right):
-        """Test that adding to a pipeline with final_transform keeps final at end."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        pipeline = CompilePipeline([container1])
-
-        result = pipeline + right
-        assert isinstance(result, CompilePipeline)
-        assert len(result) == 2
-        # Final transform should be at the end
-        assert result[0].tape_transform is second_valid_transform
-        assert result[1].tape_transform is first_valid_transform
-        assert result[1].is_final_transform
-
-    @pytest.mark.parametrize(
-        "right",
-        [
-            pytest.param(
-                BoundTransform(qml.transform(second_valid_transform, final_transform=True)),
+                BoundTransform(qp.transform(second_valid_transform, final_transform=True)),
                 id="pipeline+container_final",
             ),
             pytest.param(
-                qml.transform(second_valid_transform, final_transform=True),
+                qp.transform(second_valid_transform, final_transform=True),
                 id="pipeline+dispatcher_final",
             ),
         ],
     )
     def test_pipeline_add_with_both_final_transform_error(self, right):
         """Test that adding with final_transform to a pipeline with final_transform raises error."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
+        container1 = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
         pipeline = CompilePipeline([container1])
 
         with pytest.raises(TransformError, match="already has a terminal transform"):
             _ = pipeline + right
 
     def test_actual_final_transform_error(self):
-        """qml.gradients.param_shift + qml.gradients.hadamard should raise an error since both are final transforms."""
+        """qp.gradients.param_shift + qp.gradients.hadamard should raise an error since both are final transforms."""
         with pytest.raises(TransformError, match="are final transforms and cannot be combined."):
-            _ = qml.gradients.param_shift + qml.gradients.hadamard_grad
+            _ = qp.gradients.param_shift + qp.gradients.hadamard_grad
 
     def test_dispatcher_add_container_both_final_error(self):
         """Test that adding a final container to a final dispatcher raises an error."""
-        dispatcher = qml.transform(first_valid_transform, final_transform=True)
-        container = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        dispatcher = qp.transform(first_valid_transform, final_transform=True)
+        container = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         with pytest.raises(TransformError, match="are final transforms and cannot be combined"):
             _ = dispatcher + container
 
     def test_dispatcher_mul_final_transform_error(self):
         """Test that multiplying a final dispatcher by n > 1 raises an error."""
-        dispatcher = qml.transform(first_valid_transform, final_transform=True)
+        dispatcher = qp.transform(first_valid_transform, final_transform=True)
         with pytest.raises(
             TransformError, match="is a final transform and cannot be applied more than once"
         ):
@@ -558,21 +540,21 @@ class TestCompilePipelineDunders:
 
     def test_container_add_container_both_final_error(self):
         """Test that adding two final containers raises an error."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        container2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        container1 = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
+        container2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         with pytest.raises(TransformError, match="are final transforms and cannot be combined"):
             _ = container1 + container2
 
     def test_container_add_dispatcher_both_final_error(self):
         """Test that adding a final dispatcher to a final container raises an error."""
-        container = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        dispatcher = qml.transform(second_valid_transform, final_transform=True)
+        container = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
+        dispatcher = qp.transform(second_valid_transform, final_transform=True)
         with pytest.raises(TransformError, match="are final transforms and cannot be combined"):
             _ = container + dispatcher
 
     def test_container_mul_final_transform_error(self):
         """Test that multiplying a final container by n > 1 raises an error."""
-        container = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
+        container = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
         with pytest.raises(
             TransformError, match="is a final transform and cannot be applied more than once"
         ):
@@ -583,15 +565,15 @@ class TestCompilePipelineDunders:
         "left",
         [
             pytest.param(
-                BoundTransform(qml.transform(first_valid_transform)),
+                BoundTransform(qp.transform(first_valid_transform)),
                 id="container+pipeline",
             ),
-            pytest.param(qml.transform(first_valid_transform), id="dispatcher+pipeline"),
+            pytest.param(qp.transform(first_valid_transform), id="dispatcher+pipeline"),
         ],
     )
     def test_pipeline_radd(self, left):
         """Test that __radd__ prepends a transform to a pipeline."""
-        container2 = BoundTransform(qml.transform(second_valid_transform))
+        container2 = BoundTransform(qp.transform(second_valid_transform))
         pipeline = CompilePipeline([container2])
 
         result = left + pipeline
@@ -602,18 +584,19 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_radd_with_final_transform_error(self):
         """Test that __radd__ raises error when adding final to pipeline with final."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        container2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        container1 = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
+        container2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         pipeline = CompilePipeline([container2])
 
         with pytest.raises(TransformError, match="already has a terminal transform"):
             _ = container1 + pipeline
 
     # ============ __iadd__ tests ============
+
     def test_pipeline_iadd_container(self):
         """Test that __iadd__ appends a container in place."""
-        container1 = BoundTransform(qml.transform(first_valid_transform))
-        container2 = BoundTransform(qml.transform(second_valid_transform))
+        container1 = BoundTransform(qp.transform(first_valid_transform))
+        container2 = BoundTransform(qp.transform(second_valid_transform))
         pipeline = CompilePipeline([container1])
 
         original_id = id(pipeline)
@@ -626,8 +609,8 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_iadd_dispatcher(self):
         """Test that __iadd__ appends a dispatcher in place."""
-        container1 = BoundTransform(qml.transform(first_valid_transform))
-        dispatcher = qml.transform(second_valid_transform)
+        container1 = BoundTransform(qp.transform(first_valid_transform))
+        dispatcher = qp.transform(second_valid_transform)
         pipeline = CompilePipeline([container1])
 
         original_id = id(pipeline)
@@ -640,8 +623,8 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_iadd_pipeline(self):
         """Test that __iadd__ extends with another pipeline in place."""
-        container1 = BoundTransform(qml.transform(first_valid_transform))
-        container2 = BoundTransform(qml.transform(second_valid_transform))
+        container1 = BoundTransform(qp.transform(first_valid_transform))
+        container2 = BoundTransform(qp.transform(second_valid_transform))
         pipeline1 = CompilePipeline([container1])
         pipeline2 = CompilePipeline([container2])
 
@@ -653,23 +636,10 @@ class TestCompilePipelineDunders:
         assert pipeline1[0].tape_transform is first_valid_transform
         assert pipeline1[1].tape_transform is second_valid_transform
 
-    def test_pipeline_iadd_maintains_final_transform_at_end(self):
-        """Test that __iadd__ keeps final transform at the end."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        container2 = BoundTransform(qml.transform(second_valid_transform))
-        pipeline = CompilePipeline([container1])
-
-        pipeline += container2
-
-        assert len(pipeline) == 2
-        assert pipeline[0].tape_transform is second_valid_transform
-        assert pipeline[1].tape_transform is first_valid_transform
-        assert pipeline[1].is_final_transform
-
     def test_pipeline_iadd_with_both_final_transform_error(self):
         """Test that __iadd__ raises error when adding final to pipeline with final."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        container2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        container1 = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
+        container2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         pipeline = CompilePipeline([container1])
 
         with pytest.raises(TransformError, match="already has a terminal transform"):
@@ -677,37 +647,23 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_iadd_pipeline_with_both_final_transform_error(self):
         """Test that __iadd__ raises error when adding pipeline with final to pipeline with final."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        container2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        container1 = BoundTransform(qp.transform(first_valid_transform, final_transform=True))
+        container2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         pipeline1 = CompilePipeline([container1])
         pipeline2 = CompilePipeline([container2])
 
         with pytest.raises(TransformError, match="already has a terminal transform"):
             pipeline1 += pipeline2
 
-    def test_pipeline_iadd_pipeline_maintains_final_transform_at_end(self):
-        """Test that __iadd__ with pipeline keeps final transform at the end."""
-        container1 = BoundTransform(qml.transform(first_valid_transform, final_transform=True))
-        container2 = BoundTransform(qml.transform(second_valid_transform))
-        pipeline1 = CompilePipeline([container1])
-        pipeline2 = CompilePipeline([container2])
-
-        pipeline1 += pipeline2
-
-        assert len(pipeline1) == 2
-        assert pipeline1[0].tape_transform is second_valid_transform
-        assert pipeline1[1].tape_transform is first_valid_transform
-        assert pipeline1[1].is_final_transform
-
     def test_pipeline_iadd_pipeline_with_cotransform_cache(self):
         """Test that __iadd__ correctly handles cotransform_cache when adding pipelines."""
 
-        @qml.qnode(qml.device("default.qubit"))
+        @qp.qnode(qp.device("default.qubit"))
         def f(*_, **__):
-            return qml.state()
+            return qp.state()
 
-        new_t = qml.transform(
-            qml.gradients.param_shift.tape_transform, classical_cotransform=lambda *args: 0
+        new_t = qp.transform(
+            qp.gradients.param_shift.tape_transform, classical_cotransform=lambda *args: 0
         )
         hybrid_t = BoundTransform(new_t, (), {"hybrid": True})
 
@@ -722,12 +678,12 @@ class TestCompilePipelineDunders:
     def test_pipeline_iadd_pipeline_with_both_cotransform_cache_error(self):
         """Test that __iadd__ raises error when both pipelines have cotransform_cache."""
 
-        @qml.qnode(qml.device("default.qubit"))
+        @qp.qnode(qp.device("default.qubit"))
         def f(*_, **__):
-            return qml.state()
+            return qp.state()
 
-        new_t = qml.transform(
-            qml.gradients.param_shift.tape_transform, classical_cotransform=lambda *args: 0
+        new_t = qp.transform(
+            qp.gradients.param_shift.tape_transform, classical_cotransform=lambda *args: 0
         )
         hybrid_t = BoundTransform(new_t, (), {"hybrid": True})
 
@@ -743,7 +699,7 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_iadd_invalid_type_raises_error(self):
         """Test that __iadd__ with invalid type raises TypeError."""
-        container = BoundTransform(qml.transform(first_valid_transform))
+        container = BoundTransform(qp.transform(first_valid_transform))
         pipeline = CompilePipeline([container])
 
         with pytest.raises(TypeError):
@@ -754,7 +710,7 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_add_invalid_type_raises_error(self):
         """Test that __add__ with invalid type raises TypeError."""
-        container = BoundTransform(qml.transform(first_valid_transform))
+        container = BoundTransform(qp.transform(first_valid_transform))
         pipeline = CompilePipeline([container])
 
         with pytest.raises(TypeError):
@@ -765,7 +721,7 @@ class TestCompilePipelineDunders:
 
     def test_pipeline_radd_invalid_type_raises_error(self):
         """Test that __radd__ with invalid type raises TypeError."""
-        container = BoundTransform(qml.transform(first_valid_transform))
+        container = BoundTransform(qp.transform(first_valid_transform))
         pipeline = CompilePipeline([container])
 
         with pytest.raises(TypeError):
@@ -778,27 +734,94 @@ class TestCompilePipelineDunders:
         """Test the string representation of a pipeline."""
         compile_pipeline = CompilePipeline()
 
-        transform1 = BoundTransform(qml.transform(first_valid_transform))
-        transform2 = BoundTransform(qml.transform(second_valid_transform))
+        assert repr(compile_pipeline) == "CompilePipeline()"
+
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        transform2 = BoundTransform(qp.transform(second_valid_transform))
 
         compile_pipeline.append(transform1)
         compile_pipeline.append(transform2)
 
-        str_pipeline = repr(compile_pipeline)
-        assert (
-            str_pipeline
-            == "CompilePipeline("
-            + str(first_valid_transform.__name__)
-            + ", "
-            + str(second_valid_transform.__name__)
-            + ")"
+        pipeline_repr = repr(compile_pipeline)
+        expected_repr = f"CompilePipeline(\n  [1] {repr(transform1)},\n  [2] {repr(transform2)}\n)"
+        assert pipeline_repr == expected_repr
+
+    def test_ipython_display(self, capsys):
+        """Test that the ipython display prints the string representation of a CompilePipeline instance."""
+
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        transform2 = BoundTransform(qp.transform(second_valid_transform))
+
+        compile_pipeline = CompilePipeline()
+        compile_pipeline.append(transform1)
+        compile_pipeline.append(transform2)
+
+        compile_pipeline._ipython_display_()  # pylint: disable=protected-access
+        captured = capsys.readouterr()
+        assert str(compile_pipeline) + "\n" == captured.out
+
+    def test_str_pipeline(self):
+        """Tests the string representation of a pipeline."""
+
+        compile_pipeline = CompilePipeline()
+
+        assert str(compile_pipeline) == "CompilePipeline()"
+
+        # Tape transform
+        transform1 = BoundTransform(qp.transform(first_valid_transform))
+        # MLIR pass
+        transform2 = BoundTransform(qp.transform(pass_name="cancel-inverses"))
+
+        compile_pipeline.append(transform1)
+        compile_pipeline.append(transform2)
+
+        pipeline_str = str(compile_pipeline)
+        expected_str = (
+            "CompilePipeline(\n  [1] first_valid_transform(),\n  [2] cancel-inverses()\n)"
         )
+        assert pipeline_str == expected_str
+
+    def test_str_adds_ellipses(self):
+        """Tests that the string representation uses ellipses for long kwargs."""
+
+        # pylint:disable=unused-argument
+        def verbose_transform(
+            tape: QuantumScript, verbose_arg: str, verbose_kwarg: str | None = None
+        ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
+            """A valid transform."""
+            return [tape], lambda x: x
+
+        _CURRENT_THRESHOLD = 50
+
+        compile_pipeline = CompilePipeline()
+        compile_pipeline.append(
+            BoundTransform(
+                verbose_transform,
+                args=("x" * _CURRENT_THRESHOLD,),
+                kwargs={"verbose_kwarg": "x" * _CURRENT_THRESHOLD},
+            )
+        )
+
+        expected_str = "CompilePipeline(\n  [1] verbose_transform(xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, verbose_kwarg=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)\n)"
+        assert str(compile_pipeline) == expected_str
+
+        compile_pipeline = CompilePipeline()
+        compile_pipeline.append(
+            BoundTransform(
+                verbose_transform,
+                args=("x" * (_CURRENT_THRESHOLD + 1),),
+                kwargs={"verbose_kwarg": "x" * (_CURRENT_THRESHOLD + 1)},
+            )
+        )
+
+        expected_str = "CompilePipeline(\n  [1] verbose_transform(..., verbose_kwarg=...)\n)"
+        assert str(compile_pipeline) == expected_str
 
     def test_equality(self):
         """Tests that we can compare CompilePipeline objects with the '==' and '!=' operators."""
-        t1 = BoundTransform(qml.transforms.compile, kwargs={"num_passes": 2})
-        t2 = BoundTransform(qml.transforms.compile, kwargs={"num_passes": 2})
-        t3 = BoundTransform(qml.transforms.transpile, kwargs={"coupling_map": [(0, 1), (1, 2)]})
+        t1 = BoundTransform(qp.transforms.compile, kwargs={"num_passes": 2})
+        t2 = BoundTransform(qp.transforms.compile, kwargs={"num_passes": 2})
+        t3 = BoundTransform(qp.transforms.transpile, kwargs={"coupling_map": [(0, 1), (1, 2)]})
 
         p1 = CompilePipeline([t1, t3])
         p2 = CompilePipeline([t2, t3])
@@ -811,7 +834,7 @@ class TestCompilePipelineDunders:
         assert p1 != t1
 
         # Test inequality with different transforms
-        t4 = BoundTransform(qml.transforms.transpile, kwargs={"coupling_map": [(0, 1), (2, 3)]})
+        t4 = BoundTransform(qp.transforms.transpile, kwargs={"coupling_map": [(0, 1), (2, 3)]})
         p4 = CompilePipeline([t1, t4])
         assert p1 != p4
 
@@ -835,9 +858,9 @@ class TestCompilePipelineConstruction:
 
         pipeline = CompilePipeline(
             [
-                BoundTransform(qml.transforms.compile),
-                BoundTransform(qml.transforms.decompose),
-                BoundTransform(qml.transforms.cancel_inverses),
+                BoundTransform(qp.transforms.compile),
+                BoundTransform(qp.transforms.decompose),
+                BoundTransform(qp.transforms.cancel_inverses),
             ]
         )
         assert len(pipeline) == 3
@@ -847,9 +870,9 @@ class TestCompilePipelineConstruction:
 
         pipeline = CompilePipeline(
             [
-                qml.transforms.compile,
-                BoundTransform(qml.transforms.decompose),
-                CompilePipeline(qml.transforms.cancel_inverses),
+                qp.transforms.compile,
+                BoundTransform(qp.transforms.decompose),
+                CompilePipeline(qp.transforms.cancel_inverses),
             ]
         )
         assert len(pipeline) == 3
@@ -858,13 +881,13 @@ class TestCompilePipelineConstruction:
         """Tests constructing a CompilePipeline with a mixed series of things."""
 
         another_pipeline = CompilePipeline(
-            qml.transforms.cancel_inverses,
-            qml.transforms.diagonalize_measurements,
+            qp.transforms.cancel_inverses,
+            qp.transforms.diagonalize_measurements,
         )
         pipeline = CompilePipeline(
-            qml.transforms.cancel_inverses,
+            qp.transforms.cancel_inverses,
             another_pipeline,
-            BoundTransform(qml.transforms.decompose, kwargs={"gate_set": {qml.Rot, qml.CNOT}}),
+            BoundTransform(qp.transforms.decompose, kwargs={"gate_set": {qp.Rot, qp.CNOT}}),
         )
         assert len(pipeline) == 4
 
@@ -873,7 +896,7 @@ class TestCompilePipelineConstruction:
 
         with pytest.raises(TypeError, match="CompilePipeline can only be constructed"):
             # matrix is not a transform
-            CompilePipeline(qml.transforms.cancel_inverses, qml.matrix)
+            CompilePipeline(qp.transforms.cancel_inverses, qp.matrix)
 
 
 class TestCompilePipeline:
@@ -1059,8 +1082,8 @@ class TestCompilePipeline:
     def test_pop(self):
         """Test the pop method of the compile pipeline."""
 
-        first = qml.transform(first_valid_transform)
-        second = qml.transform(second_valid_transform, expand_transform=expand_transform)
+        first = qp.transform(first_valid_transform)
+        second = qp.transform(second_valid_transform, expand_transform=expand_transform)
         pipeline = first + second + second
 
         assert len(pipeline) == 5
@@ -1147,27 +1170,27 @@ class TestCompilePipeline:
     def test_valid_transforms(self):
         """Test adding transforms to a pipeline with a terminal transform."""
         compile_pipeline = CompilePipeline()
-        transform1 = BoundTransform(qml.transform(first_valid_transform, is_informative=True))
+        transform1 = BoundTransform(qp.transform(first_valid_transform, is_informative=True))
         compile_pipeline.append(transform1)
 
-        t_normal = BoundTransform(qml.transform(second_valid_transform))
+        t_normal = BoundTransform(qp.transform(second_valid_transform))
         compile_pipeline.append(t_normal)
         assert len(compile_pipeline) == 2
-        assert compile_pipeline[0] is t_normal
-        assert compile_pipeline[1] is transform1
+        assert compile_pipeline[0] is transform1
+        assert compile_pipeline[1] is t_normal
 
-        t_normal2 = BoundTransform(qml.transform(first_valid_transform))
+        t_normal2 = BoundTransform(qp.transform(first_valid_transform))
         compile_pipeline.append(t_normal2)
-        assert compile_pipeline[0] is t_normal
-        assert compile_pipeline[1] is t_normal2
-        assert compile_pipeline[2] is transform1
+        assert compile_pipeline[0] is transform1
+        assert compile_pipeline[1] is t_normal
+        assert compile_pipeline[2] is t_normal2
 
         with pytest.raises(
             TransformError, match="The compile pipeline already has a terminal transform."
         ):
             compile_pipeline.append(transform1)
 
-        transform2 = BoundTransform(qml.transform(second_valid_transform, final_transform=True))
+        transform2 = BoundTransform(qp.transform(second_valid_transform, final_transform=True))
         with pytest.raises(
             TransformError, match="The compile pipeline already has a terminal transform."
         ):
@@ -1202,8 +1225,8 @@ class TestCompilePipeline:
     def test_remove_with_expand_transform(self):
         """Tests that the expand_transform is removed with the original transform."""
 
-        first = qml.transform(first_valid_transform)
-        second = qml.transform(second_valid_transform, expand_transform=expand_transform)
+        first = qp.transform(first_valid_transform)
+        second = qp.transform(second_valid_transform, expand_transform=expand_transform)
 
         pipeline = second + first + second + second
         assert len(pipeline) == 7
@@ -1231,17 +1254,17 @@ class TestClassicalCotransfroms:
     def test_classical_cotransform_caching(self):
         """Tests for setting the classical cotransform."""
 
-        @qml.qnode(qml.device("default.qubit"))
+        @qp.qnode(qp.device("default.qubit"))
         def f(*_, **__):
-            return qml.state()
+            return qp.state()
 
         pipeline1 = CompilePipeline()  # no hybrid transforms
         assert pipeline1.cotransform_cache is None
         pipeline1.set_classical_component(f, (1,), {"a": 2})
         assert pipeline1.cotransform_cache is None
 
-        new_t = qml.transform(
-            qml.gradients.param_shift.tape_transform, classical_cotransform=lambda *args: 0
+        new_t = qp.transform(
+            qp.gradients.param_shift.tape_transform, classical_cotransform=lambda *args: 0
         )
 
         hybrid_t = BoundTransform(new_t, (), {"hybrid": True})
@@ -1262,15 +1285,15 @@ class TestClassicalCotransfroms:
     def test_error_on_numpy_qnode(self, arg):
         """Test an error is raised if there are no trainable parameters for a hybrid pipeline."""
 
-        @qml.qnode(qml.device("default.qubit"))
+        @qp.qnode(qp.device("default.qubit"))
         def circuit(x):
-            qml.RX(x, 0)
-            return qml.expval(qml.Z(0))
+            qp.RX(x, 0)
+            return qp.expval(qp.Z(0))
 
-        circuit = qml.gradients.param_shift(circuit, hybrid=True)
+        circuit = qp.gradients.param_shift(circuit, hybrid=True)
         circuit.compile_pipeline.set_classical_component(circuit, (arg,), {})
 
-        tape = qml.tape.QuantumScript([], [])
+        tape = qp.tape.QuantumScript([], [])
         with pytest.raises(QuantumFunctionError, match="No trainable parameters"):
             circuit.compile_pipeline((tape,))
 
@@ -1281,7 +1304,7 @@ class TestCompilePipelineCall:
     def test_call_on_empty_pipeline(self):
         """Tests that an empty pipeline returns input tapes with the null postprocessing function."""
 
-        batch = qml.tape.QuantumScript([], [qml.state()])
+        batch = qp.tape.QuantumScript([], [qp.state()])
 
         prog = CompilePipeline()
         new_batch, postprocessing = prog(batch)
@@ -1305,23 +1328,23 @@ class TestCompilePipelineCall:
             new_ops = list(tape.operations)
             new_ops.pop(index)  # pylint:disable=protected-access
             return (
-                qml.tape.QuantumScript(new_ops, tape.measurements, shots=tape.shots),
+                qp.tape.QuantumScript(new_ops, tape.measurements, shots=tape.shots),
             ), single_null_postprocessing
 
         container = BoundTransform(transform(remove_operation_at_index), kwargs={"index": 1})
         prog = CompilePipeline((container,))
 
-        tape0 = qml.tape.QuantumScript(
-            [qml.S(0), qml.T(1), qml.SX(2)], [qml.expval(qml.PauliZ(0))], shots=100
+        tape0 = qp.tape.QuantumScript(
+            [qp.S(0), qp.T(1), qp.SX(2)], [qp.expval(qp.PauliZ(0))], shots=100
         )
         batch = (tape0,)
         new_batch, fn = prog(batch)
 
         assert len(new_batch) == 1
-        expected = [qml.S(0), qml.SX(2), qml.expval(qml.PauliZ(0))]
+        expected = [qp.S(0), qp.SX(2), qp.expval(qp.PauliZ(0))]
         for op1, op2 in zip(expected, new_batch[0]):
-            qml.assert_equal(op1, op2)
-        assert new_batch[0].shots == qml.measurements.Shots(100)
+            qp.assert_equal(op1, op2)
+        assert new_batch[0].shots == qp.measurements.Shots(100)
 
         assert fn.func is _apply_postprocessing_stack
         assert fn.args == tuple()
@@ -1345,18 +1368,18 @@ class TestCompilePipelineCall:
         def scale_two(results):
             return results[0] * 2.0
 
-        def transform_add(tape: qml.tape.QuantumTape):
+        def transform_add(tape: qp.tape.QuantumTape):
             """A valid transform."""
             return (tape,), add_one
 
-        def transform_mul(tape: qml.tape.QuantumTape):
+        def transform_mul(tape: qp.tape.QuantumTape):
             return (tape,), scale_two
 
         container1 = BoundTransform(transform(transform_add))
         container2 = BoundTransform(transform(transform_mul))
         prog = CompilePipeline((container1, container2))
 
-        tape0 = qml.tape.QuantumScript([], [qml.expval(qml.PauliZ(0))], shots=100)
+        tape0 = qp.tape.QuantumScript([], [qp.expval(qp.PauliZ(0))], shots=100)
         batch = (tape0,)
         new_batch, fn = prog(batch)
 
@@ -1431,7 +1454,7 @@ class TestCompilePipelineCall:
         def split_sum_terms(tape):
             sum_obj = tape.measurements[0].obs
             new_tapes = tuple(
-                QuantumScript(tape.operations, [qml.expval(o)], shots=tape.shots) for o in sum_obj
+                QuantumScript(tape.operations, [qp.expval(o)], shots=tape.shots) for o in sum_obj
             )
 
             return new_tapes, sum_measurements
@@ -1439,14 +1462,14 @@ class TestCompilePipelineCall:
         container = BoundTransform(transform(split_sum_terms))
         prog = CompilePipeline((container,))
 
-        op = qml.Rot(1.2, 2.3, 3.4, wires=0)
+        op = qp.Rot(1.2, 2.3, 3.4, wires=0)
 
-        orig1 = qml.tape.QuantumScript([op], [qml.expval(qml.sum(qml.PauliX(0), qml.PauliZ(0)))])
-        orig2 = qml.tape.QuantumScript(
-            [op], [qml.expval(qml.sum(qml.PauliX(0), qml.PauliY(0), qml.PauliZ(0)))]
+        orig1 = qp.tape.QuantumScript([op], [qp.expval(qp.sum(qp.PauliX(0), qp.PauliZ(0)))])
+        orig2 = qp.tape.QuantumScript(
+            [op], [qp.expval(qp.sum(qp.PauliX(0), qp.PauliY(0), qp.PauliZ(0)))]
         )
-        orig3 = qml.tape.QuantumScript(
-            [op], [qml.expval(qml.sum(*(qml.PauliX(i) for i in range(5))))]
+        orig3 = qp.tape.QuantumScript(
+            [op], [qp.expval(qp.sum(*(qp.PauliX(i) for i in range(5))))]
         )  # contributes 5 terms
 
         batch, fn = prog((orig1, orig2, orig3))
@@ -1480,8 +1503,8 @@ class TestCompilePipelineCall:
         prog = CompilePipeline((container,))
 
         # Create a single QuantumScript (not wrapped in a tuple)
-        single_tape = qml.tape.QuantumScript(
-            [qml.Hadamard(0), qml.CNOT([0, 1])], [qml.expval(qml.PauliZ(0))], shots=50
+        single_tape = qp.tape.QuantumScript(
+            [qp.Hadamard(0), qp.CNOT([0, 1])], [qp.expval(qp.PauliZ(0))], shots=50
         )
 
         # Call with single QuantumScript - should trigger the isinstance check
@@ -1506,15 +1529,15 @@ class TestCompilePipelineCall:
         const = jax.numpy.array(3.5)
 
         def f(x, n):
-            qml.IsingXX(x, [0, 1])
+            qp.IsingXX(x, [0, 1])
 
-            @qml.for_loop(n)
+            @qp.for_loop(n)
             def loop_fn(i):
-                qml.Hadamard(i)
-                qml.RX(const, i)
+                qp.Hadamard(i)
+                qp.RX(const, i)
 
             loop_fn()
-            return qml.expval(qml.Z(0))
+            return qp.expval(qp.Z(0))
 
         jaxpr = jax.make_jaxpr(f)(1.5, 5)
         transformed_jaxpr = pipeline(jaxpr.jaxpr, jaxpr.consts, 1.5, 5)
@@ -1534,14 +1557,14 @@ class TestCompilePipelineCall:
         import jax
 
         pipeline = CompilePipeline()
-        pipeline.add_transform(qml.transforms.cancel_inverses)
+        pipeline.add_transform(qp.transforms.cancel_inverses)
 
         def f():
-            qml.H(0)
-            qml.X(1)
-            qml.H(0)
-            qml.X(1)
-            return qml.expval(qml.PauliZ(0))
+            qp.H(0)
+            qp.X(1)
+            qp.H(0)
+            qp.X(1)
+            return qp.expval(qp.PauliZ(0))
 
         jaxpr = jax.make_jaxpr(f)()
         transformed_jaxpr = pipeline(jaxpr.jaxpr, jaxpr.consts)
@@ -1550,8 +1573,8 @@ class TestCompilePipelineCall:
 
         assert len(transformed_jaxpr.eqns) == 2
         # pylint: disable=protected-access
-        assert transformed_jaxpr.eqns[0].primitive == qml.PauliZ._primitive
-        assert transformed_jaxpr.eqns[1].primitive == qml.measurements.ExpectationMP._obs_primitive
+        assert transformed_jaxpr.eqns[0].primitive == qp.PauliZ._primitive
+        assert transformed_jaxpr.eqns[1].primitive == qp.measurements.ExpectationMP._obs_primitive
 
     @pytest.mark.capture
     def test_call_jaxpr_multiple_transforms(self):
@@ -1560,64 +1583,63 @@ class TestCompilePipelineCall:
         import jax
 
         pipeline = CompilePipeline()
-        pipeline.add_transform(qml.transforms.cancel_inverses)
-        pipeline.add_transform(qml.transforms.defer_measurements, num_wires=3)
+        pipeline.add_transform(qp.transforms.cancel_inverses)
+        pipeline.add_transform(qp.transforms.defer_measurements, num_wires=3)
         pipeline.add_transform(
-            qml.transforms.decompose,
+            qp.transforms.decompose,
             gate_set=gate_sets.ROTATIONS_PLUS_CNOT,
             stopping_condition=lambda op: op.name != "IsingXX",
         )
 
         def f():
-            qml.H(0)
-            qml.H(0)
-            qml.measure(1)
-            qml.IsingXX(0.5, wires=[0, 1])
-            return qml.expval(qml.PauliZ(0))
+            qp.H(0)
+            qp.H(0)
+            qp.measure(1)
+            qp.IsingXX(0.5, wires=[0, 1])
+            return qp.expval(qp.PauliZ(0))
 
         jaxpr = jax.make_jaxpr(f)()
         transformed_jaxpr = pipeline(jaxpr.jaxpr, jaxpr.consts)
         assert isinstance(transformed_jaxpr, jax.extend.core.ClosedJaxpr)
 
         # pylint: disable=protected-access
-        isingxx_decomp = [qml.CNOT(wires=[0, 1]), qml.RX(0.5, wires=[0]), qml.CNOT(wires=[0, 1])]
+        isingxx_decomp = [qp.CNOT(wires=[0, 1]), qp.RX(0.5, wires=[0]), qp.CNOT(wires=[0, 1])]
         expected_primitives = [
-            qml.CNOT._primitive,
+            qp.CNOT._primitive,
             *[op._primitive for op in isingxx_decomp],
-            qml.PauliZ._primitive,
-            qml.measurements.ExpectationMP._obs_primitive,
+            qp.PauliZ._primitive,
+            qp.measurements.ExpectationMP._obs_primitive,
         ]
-        for eqn, expected_primitive in zip(
-            transformed_jaxpr.eqns, expected_primitives, strict=True
-        ):
+        ops_and_meas = extract_ops_and_meas_prims(transformed_jaxpr)
+        for eqn, expected_primitive in zip(ops_and_meas, expected_primitives, strict=True):
             assert eqn.primitive == expected_primitive
 
     def test_call_fallback_on_qnode(self):
         """Test that a CompilePipeline can be applied to a QNode using the fallback."""
 
         program = CompilePipeline()
-        program += qml.transforms.cancel_inverses
+        program += qp.transforms.cancel_inverses
         program += transform(first_valid_transform)(0)
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def circuit(a):
-            qml.Hadamard(wires=0)
-            qml.PauliX(wires=0)
-            qml.PauliX(wires=0)  # Should be cancelled
-            qml.RZ(a, wires=1)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            qp.PauliX(wires=0)
+            qp.PauliX(wires=0)  # Should be cancelled
+            qp.RZ(a, wires=1)
+            return qp.expval(qp.PauliZ(wires=0))
 
         # Apply the program to the QNode
         new_qnode = program(circuit)
 
-        assert isinstance(new_qnode, qml.QNode)
+        assert isinstance(new_qnode, qp.QNode)
         # The QNode should have the transforms from the program
         assert len(new_qnode.compile_pipeline) == 2
         assert (
             new_qnode.compile_pipeline[0].tape_transform
-            is qml.transforms.cancel_inverses.tape_transform
+            is qp.transforms.cancel_inverses.tape_transform
         )
         assert new_qnode.compile_pipeline[1].tape_transform is first_valid_transform
 
@@ -1627,26 +1649,26 @@ class TestCompilePipelineCall:
         program = CompilePipeline()
         program += transform(first_valid_transform)(0)
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.transforms.cancel_inverses
-        @qml.qnode(device=dev)
+        @qp.transforms.cancel_inverses
+        @qp.qnode(device=dev)
         def circuit(a):
-            qml.Hadamard(wires=0)
-            qml.PauliX(wires=0)
-            qml.PauliX(wires=0)  # Should be cancelled
-            qml.RZ(a, wires=1)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            qp.PauliX(wires=0)
+            qp.PauliX(wires=0)  # Should be cancelled
+            qp.RZ(a, wires=1)
+            return qp.expval(qp.PauliZ(wires=0))
 
         # Apply the program to the QNode
         new_qnode = program(circuit)
 
-        assert isinstance(new_qnode, qml.QNode)
+        assert isinstance(new_qnode, qp.QNode)
         # The QNode should have the transforms from the program
         assert len(new_qnode.compile_pipeline) == 2
         assert (
             new_qnode.compile_pipeline[0].tape_transform
-            is qml.transforms.cancel_inverses.tape_transform
+            is qp.transforms.cancel_inverses.tape_transform
         )
         assert new_qnode.compile_pipeline[1].tape_transform is first_valid_transform
 
@@ -1655,12 +1677,12 @@ class TestCompilePipelineCall:
 
         program = CompilePipeline()
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def circuit():
-            qml.Hadamard(wires=0)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            return qp.expval(qp.PauliZ(wires=0))
 
         new_qnode = program(circuit)
 
@@ -1674,8 +1696,8 @@ class TestCompilePipelineCall:
         program += transform(first_valid_transform)(0)
 
         def qfunc():
-            qml.Hadamard(wires=0)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            return qp.expval(qp.PauliZ(wires=0))
 
         # Apply the program to a callable
         transformed_qfunc = program(qfunc)
@@ -1701,12 +1723,12 @@ class TestCompilePipelineCall:
         program += transform(tracking_transform_1)
         program += transform(tracking_transform_2)
 
-        dev = qml.device("default.qubit", wires=1)
+        dev = qp.device("default.qubit", wires=1)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def circuit():
-            qml.Hadamard(wires=0)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            return qp.expval(qp.PauliZ(wires=0))
 
         # Apply the program - transforms should be in the QNode's transform_program
         new_qnode = program(circuit)
@@ -1720,18 +1742,18 @@ class TestCompilePipelineCall:
         """Test that a CompilePipeline applied to a QNode actually transforms execution."""
 
         program = CompilePipeline()
-        program += transform(qml.transforms.cancel_inverses)
+        program += transform(qp.transforms.cancel_inverses)
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def circuit():
-            qml.Hadamard(wires=0)
-            qml.PauliX(wires=0)
-            qml.PauliX(wires=0)  # These should be cancelled
-            qml.PauliY(wires=1)
-            qml.PauliY(wires=1)  # These should be cancelled
-            return qml.expval(qml.PauliZ(0))
+            qp.Hadamard(wires=0)
+            qp.PauliX(wires=0)
+            qp.PauliX(wires=0)  # These should be cancelled
+            qp.PauliY(wires=1)
+            qp.PauliY(wires=1)  # These should be cancelled
+            return qp.expval(qp.PauliZ(0))
 
         # Apply the program to the QNode
         transformed_qnode = program(circuit)
@@ -1748,18 +1770,18 @@ class TestCompilePipelineCall:
         assert resources.depth == 1
 
         # Check the numerical output: H|0> gives |+>, expectation of Z is 0
-        assert qml.math.allclose(result, 0.0)
+        assert qp.math.allclose(result, 0.0)
 
     def test_call_on_device(self):
         """Test that a CompilePipeline can be applied to a Device."""
 
         # Create a dummy device with a custom preprocess_transforms method
-        class DummyDevice(qml.devices.Device):
+        class DummyDevice(qp.devices.Device):
             def preprocess_transforms(
                 self, execution_config=None
             ):  # pylint: disable=unused-argument
                 prog = CompilePipeline()
-                prog.add_transform(qml.defer_measurements)
+                prog.add_transform(qp.defer_measurements)
                 return prog
 
             def execute(self, circuits, execution_config=None):  # pylint: disable=unused-argument
@@ -1769,7 +1791,7 @@ class TestCompilePipelineCall:
 
         # Create a program with transforms
         program = CompilePipeline()
-        program += transform(qml.transforms.cancel_inverses)
+        program += transform(qp.transforms.cancel_inverses)
         program += transform(first_valid_transform)(0)
 
         # Apply the program to the device
@@ -1797,7 +1819,7 @@ class TestCompilePipelineCall:
         assert len(new_program) == 3
 
         # Verify the transforms are in the right order and are the right ones
-        assert new_program[-2].tape_transform is qml.transforms.cancel_inverses.tape_transform
+        assert new_program[-2].tape_transform is qp.transforms.cancel_inverses.tape_transform
         assert new_program[-1].tape_transform is first_valid_transform
 
 
@@ -1809,28 +1831,23 @@ class TestCompilePipelineIntegration:
 
         dispatched_transform = transform(first_valid_transform)
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def qnode_circuit(a):
             """QNode circuit."""
-            qml.Hadamard(wires=0)
-            qml.CNOT(wires=[0, 1])
-            qml.PauliX(wires=0)
-            qml.RZ(a, wires=1)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            qp.CNOT(wires=[0, 1])
+            qp.PauliX(wires=0)
+            qp.RZ(a, wires=1)
+            return qp.expval(qp.PauliZ(wires=0))
 
         new_qnode = dispatched_transform(dispatched_transform(qnode_circuit, 0), 0)
 
         pipeline = new_qnode.compile_pipeline
-        transformed_qnode_rep = repr(pipeline)
-        assert (
-            transformed_qnode_rep
-            == "CompilePipeline("
-            + str(first_valid_transform.__name__)
-            + ", "
-            + str(first_valid_transform.__name__)
-            + ")"
+        assert pipeline == CompilePipeline(
+            BoundTransform(dispatched_transform, args=(0,)),
+            BoundTransform(dispatched_transform, args=(0,)),
         )
 
         assert pipeline
@@ -1844,28 +1861,21 @@ class TestCompilePipelineIntegration:
         dispatched_transform_1 = transform(first_valid_transform)
         dispatched_transform_2 = transform(informative_transform, is_informative=True)
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def qnode_circuit(a):
             """QNode circuit."""
-            qml.Hadamard(wires=0)
-            qml.CNOT(wires=[0, 1])
-            qml.PauliX(wires=0)
-            qml.RZ(a, wires=1)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            qp.CNOT(wires=[0, 1])
+            qp.PauliX(wires=0)
+            qp.RZ(a, wires=1)
+            return qp.expval(qp.PauliZ(wires=0))
 
         new_qnode = dispatched_transform_2(dispatched_transform_1(qnode_circuit, 0))
-
         pipeline = new_qnode.compile_pipeline
-        transformed_qnode_rep = repr(pipeline)
-        assert (
-            transformed_qnode_rep
-            == "CompilePipeline("
-            + str(first_valid_transform.__name__)
-            + ", "
-            + str(informative_transform.__name__)
-            + ")"
+        assert pipeline == CompilePipeline(
+            BoundTransform(dispatched_transform_1, args=(0,)), dispatched_transform_2
         )
 
         assert pipeline
@@ -1882,31 +1892,516 @@ class TestCompilePipelineIntegration:
         dispatched_transform_1 = transform(first_valid_transform)
         dispatched_transform_2 = transform(second_valid_transform)
 
-        dev = qml.device("default.qubit", wires=2)
+        dev = qp.device("default.qubit", wires=2)
 
-        @qml.qnode(device=dev)
+        @qp.qnode(device=dev)
         def qnode_circuit(a):
             """QNode circuit."""
-            qml.Hadamard(wires=0)
-            qml.CNOT(wires=[0, 1])
-            qml.PauliX(wires=0)
-            qml.RZ(a, wires=1)
-            return qml.expval(qml.PauliZ(wires=0))
+            qp.Hadamard(wires=0)
+            qp.CNOT(wires=[0, 1])
+            qp.PauliX(wires=0)
+            qp.RZ(a, wires=1)
+            return qp.expval(qp.PauliZ(wires=0))
 
         new_qnode = dispatched_transform_2(dispatched_transform_1(qnode_circuit, 0), 0)
 
         pipeline = new_qnode.compile_pipeline
-        transformed_qnode_rep = repr(pipeline)
-        assert (
-            transformed_qnode_rep
-            == "CompilePipeline("
-            + str(first_valid_transform.__name__)
-            + ", "
-            + str(second_valid_transform.__name__)
-            + ")"
+        assert pipeline == CompilePipeline(
+            BoundTransform(dispatched_transform_1, args=(0,)),
+            BoundTransform(dispatched_transform_2, args=(0,)),
         )
-
         assert pipeline
         assert len(pipeline) == 2
         assert pipeline[0].tape_transform is first_valid_transform
         assert pipeline[1].tape_transform is second_valid_transform
+
+
+class TestMarkers:
+    """Tests markers in a compile pipeline"""
+
+    def test_add_marker(self):
+        """Tests that add_marker method works."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("test")
+        pipeline.add_transform(transform(second_valid_transform))
+
+        # add after the fact with index
+        pipeline.add_marker("initial", 0)
+
+        assert pipeline.markers == ["test", "initial"]
+        assert pipeline.get_marker_level("initial") == 0
+        assert pipeline.get_marker_level("test") == 1
+
+    def test_remove_marker(self):
+        """Tests that remove_marker method works."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("test")
+        pipeline.add_transform(transform(second_valid_transform))
+
+        assert pipeline.markers == ["test"]
+        assert pipeline.get_marker_level("test") == 1
+
+        pipeline.remove_marker("test")
+
+        assert pipeline.markers == []
+
+        with pytest.raises(ValueError, match="No marker found with label 'test'"):
+            pipeline.remove_marker("test")
+
+    @pytest.mark.parametrize("undefined_label", [True, [], 0.5, 1])
+    def test_marker_unsupported_label_type(self, undefined_label):
+        """Tests that labels must be strings."""
+
+        pipeline = CompilePipeline()
+        with pytest.raises(
+            ValueError,
+            match="Marker label must be a string",
+        ):
+            pipeline.add_marker(undefined_label)
+
+    @pytest.mark.parametrize("undefined_level", [-1, 0.5, 10])
+    def test_add_marker_on_undefined_level(self, undefined_level):
+        """Tests that adding a marker on an undefined level raises an error."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        with pytest.raises(
+            ValueError,
+            match="Marker level must be an integer between 0 and the number of transforms in the pipeline",
+        ):
+            pipeline.add_marker("test", level=undefined_level)
+
+    @pytest.mark.parametrize("protected_name", [level.value for level in ProtectedLevel])
+    def test_add_marker_with_protected_name(self, protected_name):
+        """Test that adding a marker with a protected name raises an error."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        with pytest.raises(
+            ValueError,
+            match=f"Found marker for protected level '{protected_name}'",
+        ):
+            pipeline.add_marker(protected_name)
+
+    def test_add_duplicate_marker(self):
+        """Test that adding a duplicate marker raises an error."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("test")
+        pipeline.add_transform(transform(second_valid_transform))
+        with pytest.raises(
+            ValueError, match="Found multiple markers for level 'test'. Markers must be unique."
+        ):
+            pipeline.add_marker("test")
+
+    def test_mul_pipeline_with_markers(self):
+        """Tests that markers are preserved when pipelines are duplicated with *."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("test_marker")
+
+        pipeline *= 3
+
+        assert pipeline.markers == ["test_marker"]
+        assert pipeline.get_marker_level("test_marker") == 1
+
+    def test_iadd_pipelines_with_markers(self):
+        """Tests that markers are preserved when pipelines are combined with +=."""
+
+        pipeline1 = CompilePipeline()
+        pipeline1.add_transform(transform(first_valid_transform))
+        pipeline1.add_marker("marker1")
+
+        pipeline2 = CompilePipeline()
+        pipeline2.add_transform(transform(second_valid_transform))
+        pipeline2.add_marker("marker2")
+
+        pipeline1 += pipeline2
+
+        assert pipeline1.markers == ["marker1", "marker2"]
+        assert pipeline1.get_marker_level("marker1") == 1
+        assert pipeline1.get_marker_level("marker2") == 2
+
+    def test_add_pipelines_with_markers(self):
+        """Tests that markers are preserved when pipelines are combined with +."""
+
+        pipeline1 = CompilePipeline()
+        pipeline1.add_transform(transform(first_valid_transform))
+        pipeline1.add_marker("marker1")
+
+        pipeline2 = CompilePipeline()
+        pipeline2.add_transform(transform(second_valid_transform))
+        pipeline2.add_marker("marker2")
+
+        combined_pipeline = pipeline1 + pipeline2
+
+        assert combined_pipeline.markers == ["marker1", "marker2"]
+        assert combined_pipeline.get_marker_level("marker1") == 1
+        assert combined_pipeline.get_marker_level("marker2") == 2
+
+    def test_radd_pipelines_with_markers(self):
+        """Tests that markers are preserved when pipelines are combined with + in reverse order."""
+
+        pipeline1 = CompilePipeline()
+        pipeline1.add_transform(transform(first_valid_transform))
+        pipeline1.add_marker("marker1")
+
+        pipeline2 = CompilePipeline()
+        pipeline2.add_transform(transform(second_valid_transform))
+        pipeline2.add_marker("marker2")
+
+        combined_pipeline = pipeline2 + pipeline1
+
+        assert combined_pipeline.markers == ["marker2", "marker1"]
+        assert combined_pipeline.get_marker_level("marker2") == 1
+        assert combined_pipeline.get_marker_level("marker1") == 2
+
+    def test_insert_with_markers(self):
+        """Tests that markers are preserved when inserting transforms into a pipeline."""
+
+        compile_pipeline = CompilePipeline()
+        transform1 = transform(second_valid_transform)
+        compile_pipeline.add_transform(transform1)
+        compile_pipeline *= 2  # Duplicate to have two transforms
+        compile_pipeline.add_marker("test_marker")
+        assert compile_pipeline.markers == ["test_marker"]
+        assert compile_pipeline.get_marker_level("test_marker") == 2
+
+        # insert a new transform in between at position 1
+        compile_pipeline.insert(1, transform(first_valid_transform))
+
+        assert compile_pipeline.markers == ["test_marker"]
+        # marker gets bumped to level 3
+        assert compile_pipeline.get_marker_level("test_marker") == 3
+
+    def test_str_pipeline_with_markers(self):
+        """Tests that the string representation of a pipeline includes markers."""
+
+        compile_pipeline = CompilePipeline()
+        pipeline_str = str(compile_pipeline)
+        assert pipeline_str == "CompilePipeline()"
+
+        # First marker has a bent arrow
+        compile_pipeline.add_marker("marker0")
+        pipeline_str = str(compile_pipeline)
+        assert pipeline_str == "CompilePipeline(\n   └─▶ marker0\n)"
+
+        compile_pipeline.add_marker("marker1")
+
+        # Markers stack properly
+        pipeline_str = str(compile_pipeline)
+        assert pipeline_str == "CompilePipeline(\n   └─▶ marker0, marker1\n)"
+
+        compile_pipeline.add_transform(transform(first_valid_transform))
+        compile_pipeline.add_marker("marker2")
+
+        # First markers have bar, second marker has a bent arrow
+        pipeline_str = str(compile_pipeline)
+        assert (
+            pipeline_str
+            == "CompilePipeline(\n   ├─▶ marker0, marker1\n  [1] first_valid_transform()\n   └─▶ marker2\n)"
+        )
+
+        compile_pipeline.add_transform(transform(second_valid_transform))
+        compile_pipeline.add_marker("marker3")
+
+        # Only final marker has the bent arrow, rest have bars
+        pipeline_str = str(compile_pipeline)
+        assert (
+            pipeline_str
+            == "CompilePipeline(\n   ├─▶ marker0, marker1\n  [1] first_valid_transform(),\n   ├─▶ marker2\n  [2] second_valid_transform()\n   └─▶ marker3\n)"
+        )
+
+    def test_repr_pipeline_with_markers(self):
+        """Tests that the repr representation of a pipeline includes markers."""
+
+        compile_pipeline = CompilePipeline()
+        pipeline_repr = repr(compile_pipeline)
+        assert pipeline_repr == "CompilePipeline()"
+
+        compile_pipeline.add_marker("marker0")
+
+        pipeline_repr = repr(compile_pipeline)
+        assert pipeline_repr == "CompilePipeline(\n   └─▶ marker0\n)"
+
+        compile_pipeline.add_marker("marker1")
+
+        pipeline_repr = repr(compile_pipeline)
+        assert pipeline_repr == "CompilePipeline(\n   └─▶ marker0, marker1\n)"
+
+        compile_pipeline.add_transform(transform(first_valid_transform))
+        compile_pipeline.add_marker("marker2")
+
+        # First markers have bar, second marker has a bent arrow
+        pipeline_repr = repr(compile_pipeline)
+        assert (
+            pipeline_repr
+            == "CompilePipeline(\n   ├─▶ marker0, marker1\n  [1] <first_valid_transform()>\n   └─▶ marker2\n)"
+        )
+        compile_pipeline.add_transform(transform(second_valid_transform))
+        compile_pipeline.add_marker("marker3")
+
+        pipeline_repr = repr(compile_pipeline)
+        assert (
+            pipeline_repr
+            == "CompilePipeline(\n   ├─▶ marker0, marker1\n  [1] <first_valid_transform()>,\n   ├─▶ marker2\n  [2] <second_valid_transform()>\n   └─▶ marker3\n)"
+        )
+
+    def test_copy_preserves_markers(self):
+        """Tests that copying a pipeline preserves markers."""
+
+        compile_pipeline = CompilePipeline()
+        compile_pipeline.add_transform(transform(first_valid_transform))
+        compile_pipeline.add_marker("marker1")
+        compile_pipeline.add_transform(transform(second_valid_transform))
+        compile_pipeline.add_marker("marker2")
+
+        copied_pipeline = copy(compile_pipeline)
+
+        assert copied_pipeline.markers == ["marker1", "marker2"]
+        assert copied_pipeline.get_marker_level("marker1") == 1
+        assert copied_pipeline.get_marker_level("marker2") == 2
+
+    def test_pop_updates_markers(self):
+        """Test that popping a transform shifts subsequent markers."""
+        pipeline = CompilePipeline()
+        pipeline.add_marker("start")  # level 0
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("after-first")  # level 1
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("after-second")  # level 2
+
+        pipeline.pop(0)  # Remove first transform
+        assert len(pipeline) == 1
+
+        # 'start' still points to 0, 'after-first' should now point to 0, 'after-second' to 1
+        assert pipeline.markers == ["start", "after-first", "after-second"]
+        assert pipeline.get_marker_level("start") == 0
+        assert pipeline.get_marker_level("after-first") == 0
+        assert pipeline.get_marker_level("after-second") == 1
+
+    def test_pop_negative_index_updates_markers(self):
+        """Test that popping a transform with a negative index shifts subsequent markers."""
+        pipeline = CompilePipeline()
+        pipeline.add_marker("start")  # level 0
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("after-first")  # level 1
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("after-second")  # level 2
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("after-third")  # level 3
+
+        pipeline.pop(-2)  # Remove second last transform
+        assert len(pipeline) == 2
+
+        # 'start' still points to 0, 'after-first' should now point to 1, 'after-second' to 1 and 'after-third' to 2
+        assert pipeline.markers == ["start", "after-first", "after-second", "after-third"]
+        assert pipeline.get_marker_level("start") == 0
+        assert pipeline.get_marker_level("after-first") == 1
+        assert pipeline.get_marker_level("after-second") == 1
+        assert pipeline.get_marker_level("after-third") == 2
+
+    def test_pop_with_expand_transform_updates_markers(self):
+        """Test that popping a transform shifts subsequent markers."""
+        pipeline = CompilePipeline()
+        pipeline.add_marker("start")  # level 0
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("after-first")  # level 1
+        pipeline.add_transform(transform(first_valid_transform, expand_transform=expand_transform))
+        pipeline.add_marker("after-second")  # level 2
+
+        assert len(pipeline) == 3
+
+        pipeline.pop()  # Remove second and third transform
+
+        # 'start' still points to 0, 'after-first' should now point to 0, 'after-second' to 1
+        assert pipeline.markers == ["start", "after-first", "after-second"]
+        assert pipeline.get_marker_level("start") == 0
+        assert pipeline.get_marker_level("after-first") == 1
+        assert pipeline.get_marker_level("after-second") == 1
+
+    def test_remove_updates_markers(self):
+        """Test that removing a transform shifts subsequent markers."""
+        pipeline = CompilePipeline()
+        pipeline.add_marker("start")  # level 0
+        pipeline += BoundTransform(transform(first_valid_transform))
+        pipeline.add_marker("after-first")  # level 1
+        pipeline += BoundTransform(transform(second_valid_transform))
+        pipeline.add_marker("after-second")  # level 2
+
+        pipeline.remove(BoundTransform(transform(first_valid_transform)))  # Remove first transform
+
+        assert len(pipeline) == 1
+        assert pipeline[0].tape_transform is second_valid_transform
+
+        # 'start' still points to 0, 'after-first' should now point to 0, 'after-second' to 1
+        assert pipeline.markers == ["start", "after-first", "after-second"]
+        assert pipeline.get_marker_level("start") == 0
+        assert pipeline.get_marker_level("after-first") == 0
+        assert pipeline.get_marker_level("after-second") == 1
+
+    def test_top_level_marker_concatenation(self):
+        """Test that a marker at level 0 stays at 0 during prepending."""
+        p1 = CompilePipeline()
+        p1.add_marker("start")
+        p1.add_transform(transform(first_valid_transform))
+
+        p2 = CompilePipeline()
+        p2.add_transform(transform(second_valid_transform))
+
+        combined = p2 + p1
+        # 'start' should now be at level 1 of the combined pipeline.
+        assert combined.get_marker_level("start") == 1
+
+    def test_markers_dont_mutate_during_addition(self):
+        """Tests that markers in the original pipelines don't mutate during addition."""
+
+        pipeline1 = CompilePipeline()
+        pipeline1.add_transform(transform(first_valid_transform))
+        pipeline1.add_marker("marker1")
+
+        pipeline2 = CompilePipeline()
+        pipeline2.add_transform(transform(second_valid_transform))
+        pipeline2.add_marker("marker2")
+
+        combined = pipeline1 + pipeline2
+
+        # Original pipelines should remain unchanged
+        assert pipeline1.markers == ["marker1"]
+        assert pipeline1.get_marker_level("marker1") == 1
+
+        assert pipeline2.markers == ["marker2"]
+        assert pipeline2.get_marker_level("marker2") == 1
+
+        assert combined.markers == ["marker1", "marker2"]
+        assert combined.get_marker_level("marker1") == 1
+        assert combined.get_marker_level("marker2") == 2
+
+    def test_add_multiple_markers(self):
+        """Tests that markers stack properly."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_marker("marker1")
+        pipeline.add_marker("marker2")
+        pipeline.add_marker("marker3")
+
+        assert pipeline.markers == ["marker1", "marker2", "marker3"]
+        assert pipeline.get_marker_level("marker1") == 0
+        assert pipeline.get_marker_level("marker2") == 0
+        assert pipeline.get_marker_level("marker3") == 0
+
+    def test_trivial_slicing_preserves_markers(self):
+        """Tests that a full slice preserves markers."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_marker("marker0")
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("marker1")
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("marker2")
+
+        sliced = pipeline[:]
+        assert pipeline == sliced
+        assert pipeline._markers == sliced._markers
+
+    def test_slicing_trivial_start_and_stop_with_unity_step(self):
+        """Ensures that slicing preserves markers correctly."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_marker("marker0")
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("marker1")
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("marker2")
+
+        slice1 = pipeline[:1]
+        expected_slice1 = CompilePipeline()
+        expected_slice1.add_marker("marker0")
+        expected_slice1.add_transform(transform(first_valid_transform))
+        assert slice1 == expected_slice1
+        assert slice1._markers == expected_slice1._markers
+
+        slice2 = pipeline[1:]
+        expected_slice2 = CompilePipeline()
+        expected_slice2.add_marker("marker1")
+        expected_slice2.add_transform(transform(second_valid_transform))
+        # Preserve final marker as it's slicing until the end
+        expected_slice2.add_marker("marker2")
+        assert slice2 == expected_slice2
+        assert slice2._markers == expected_slice2._markers
+
+        # Ensure slicing is consistent
+        assert slice1 + slice2 == pipeline[:]
+
+    def test_slicing_nontrivial_start_and_stop_with_unity_step(self):
+        """Ensures that slicing preserves markers correctly."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_marker("marker0")
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("marker1")
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("marker2")
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("marker3")
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("marker4")
+
+        slice1 = pipeline[1:3]
+        expected_slice1 = CompilePipeline()
+        expected_slice1.add_marker("marker1")
+        expected_slice1.add_transform(transform(second_valid_transform))
+        expected_slice1.add_marker("marker2")
+        expected_slice1.add_transform(transform(first_valid_transform))
+        assert slice1 == expected_slice1
+        assert slice1._markers == expected_slice1._markers
+
+        slice2 = pipeline[3:]
+        expected_slice2 = CompilePipeline()
+        expected_slice2.add_marker("marker3")
+        expected_slice2.add_transform(transform(second_valid_transform))
+        expected_slice2.add_marker("marker4")
+        assert slice2 == expected_slice2
+        assert slice2._markers == expected_slice2._markers
+
+        assert slice1 + slice2 == pipeline[1:]
+
+    def test_step_other_than_one_raises_warning(self):
+        """Test that a step other than one raises a warning."""
+
+        pipeline = CompilePipeline()
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("marker1")
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("marker2")
+        pipeline.add_transform(transform(first_valid_transform))
+        pipeline.add_marker("marker3")
+        pipeline.add_transform(transform(second_valid_transform))
+        pipeline.add_marker("marker4")
+
+        with pytest.warns(
+            UserWarning,
+            match="Slicing a CompilePipeline that contains markers with a step size other than 1 is not supported",
+        ):
+            _ = pipeline[::2]
+
+    def test_equality_with_markers(self):
+        """Tests that two pipelines are only equal if their markers match"""
+
+        pipeline1 = CompilePipeline()
+        pipeline1.add_marker("marker0")
+
+        pipeline2 = CompilePipeline()
+        pipeline2.add_marker("marker0")
+
+        pipeline3 = CompilePipeline()
+        pipeline3.add_marker("marker1")
+
+        assert pipeline1 == pipeline2
+        assert pipeline1 != pipeline3

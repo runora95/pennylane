@@ -15,6 +15,7 @@
 Contains the metric_tensor batch_transform which wraps multiple
 methods of computing the metric tensor.
 """
+
 import functools
 import warnings
 from functools import partial
@@ -24,12 +25,14 @@ import numpy as np
 import pennylane.ops as qops
 from pennylane import math
 from pennylane.circuit_graph import LayerData
-from pennylane.exceptions import WireError
+from pennylane.decomposition import gate_sets
+from pennylane.exceptions import TermsUndefinedError, WireError
 from pennylane.measurements import expval, probs
 from pennylane.ops.functions import generator, matrix
+from pennylane.ops.qubit.attributes import has_unitary_generator
 from pennylane.queuing import WrappedObj
 from pennylane.tape import QuantumScript, QuantumScriptBatch
-from pennylane.transforms import expand_multipar, expand_nonunitary_gen
+from pennylane.transforms import decompose
 from pennylane.transforms.core import transform
 from pennylane.typing import PostprocessingFn
 from pennylane.wires import Wires
@@ -72,6 +75,17 @@ def _contract_metric_tensor_with_cjac(mt, cjac, tape):  # pylint: disable=unused
     return _mt_cjac_tdot(mt, cjac)
 
 
+def _multipar_stopping_fn(obj):
+    try:
+        return len(obj.data) == 0 or (obj.has_generator and len(obj.generator().terms()[0]) == 1)
+    except TermsUndefinedError:
+        return True
+
+
+def _expand_nonunitary_gen_stop_at(obj):
+    return len(obj.data) == 0 or (obj.has_generator and obj in has_unitary_generator)
+
+
 # pylint: disable=too-many-positional-arguments
 def _expand_metric_tensor(
     tape: QuantumScript,
@@ -85,8 +99,19 @@ def _expand_metric_tensor(
     # pylint: disable=unused-argument,too-many-arguments
 
     if not allow_nonunitary and approx is None:
-        return [expand_nonunitary_gen(tape)], lambda x: x[0]
-    return [expand_multipar(tape)], lambda x: x[0]
+        [new_tape], postprocessing = decompose(
+            tape,
+            gate_set=gate_sets.ROTATIONS_PLUS_CNOT,
+            stopping_condition=_expand_nonunitary_gen_stop_at,
+        )
+    else:
+        [new_tape], postprocessing = decompose(
+            tape, gate_set=gate_sets.ROTATIONS_PLUS_CNOT, stopping_condition=_multipar_stopping_fn
+        )
+    if new_tape is not tape:
+        params = new_tape.get_parameters(trainable_only=False)
+        new_tape.trainable_params = math.get_trainable_indices(params)
+    return [new_tape], postprocessing
 
 
 @partial(
@@ -169,7 +194,7 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
     Returns:
         qnode (QNode) or tuple[List[QuantumTape], function]:
 
-        The transformed circuit as described in :func:`qml.transform <pennylane.transform>`. Executing this circuit
+        The transformed circuit as described in :func:`qp.transform <pennylane.transform>`. Executing this circuit
         will provide the metric tensor in the form of a tensor.
 
     The block-diagonal part of the metric tensor always is computed using the
@@ -199,18 +224,18 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
         For example,
 
         >>> from jax import numpy as jnp
-        >>> @qml.qnode(qml.device('lightning.qubit', wires=4))
+        >>> @qp.qnode(qp.device('lightning.qubit', wires=4))
         ... def c(x, y):
-        ...     qml.RX(2*x, 0)
-        ...     qml.RY(y, 0)
-        ...     return qml.expval(qml.Z(0))
+        ...     qp.RX(2*x, 0)
+        ...     qp.RY(y, 0)
+        ...     return qp.expval(qp.Z(0))
         ...
-        >>> qml.qjit(qml.metric_tensor(c))(jnp.array(0.5), jnp.array(0.6))
+        >>> qp.qjit(qp.metric_tensor(c))(jnp.array(0.5), jnp.array(0.6))
         Array([[0.25      , 0.        ],
                 [0.        , 0.07298165]], dtype=float64)
-        >>> qml.metric_tensor(c, argnums=(0,1))(jnp.array(0.5), jnp.array(0.6))
+        >>> qp.metric_tensor(c, argnums=(0,1))(jnp.array(0.5), jnp.array(0.6))
         (Array(1., dtype=float64), Array(0.07298165, dtype=float64))
-        >>> qml.metric_tensor(c, hybrid=False)(qml.numpy.array(0.5), qml.numpy.array(0.6))
+        >>> qp.metric_tensor(c, hybrid=False)(qp.numpy.array(0.5), qp.numpy.array(0.6))
         array([[0.25      , 0.        ],
                 [0.        , 0.07298165]])
 
@@ -235,21 +260,21 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
 
     .. code-block:: python
 
-        dev = qml.device("default.qubit", wires=3)
+        dev = qp.device("default.qubit", wires=3)
 
-        @qml.qnode(dev, interface="autograd")
+        @qp.qnode(dev, interface="autograd")
         def circuit(weights):
-            qml.RX(weights[0], wires=0)
-            qml.RY(weights[1], wires=0)
-            qml.CNOT(wires=[0, 1])
-            qml.RZ(weights[2], wires=1)
-            qml.RZ(weights[3], wires=0)
-            return qml.expval(qml.Z(0) @ qml.Z(1)), qml.expval(qml.Y(1))
+            qp.RX(weights[0], wires=0)
+            qp.RY(weights[1], wires=0)
+            qp.CNOT(wires=[0, 1])
+            qp.RZ(weights[2], wires=1)
+            qp.RZ(weights[3], wires=0)
+            return qp.expval(qp.Z(0) @ qp.Z(1)), qp.expval(qp.Y(1))
 
     We can use the ``metric_tensor`` transform to generate a new function that returns the
     metric tensor of this QNode:
 
-    >>> mt_fn = qml.metric_tensor(circuit)
+    >>> mt_fn = qp.metric_tensor(circuit)
     >>> weights = np.array([0.1, 0.2, 0.4, 0.5], requires_grad=True)
     >>> mt_fn(weights)
     tensor([[ 0.25  ,  0.    , -0.0497, -0.0497],
@@ -262,7 +287,7 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
     and does not need an auxiliary wire on the device. This can be done using the
     ``approx`` keyword:
 
-    >>> mt_fn = qml.metric_tensor(circuit, approx="block-diag")
+    >>> mt_fn = qp.metric_tensor(circuit, approx="block-diag")
     >>> weights = np.array([0.1, 0.2, 0.4, 0.5], requires_grad=True)
     >>> mt_fn(weights)
     tensor([[0.25  , 0.    , 0.    , 0.    ],
@@ -279,8 +304,8 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
     For example, we can compute the gradient of the Frobenius norm of the metric tensor
     with respect to the QNode ``weights`` :
 
-    >>> norm_fn = lambda x: qml.math.linalg.norm(mt_fn(x), ord="fro")
-    >>> grad_fn = qml.grad(norm_fn)
+    >>> norm_fn = lambda x: qp.math.linalg.norm(mt_fn(x), ord="fro")
+    >>> grad_fn = qp.grad(norm_fn)
     >>> grad_fn(weights)
     array([-0.0282246 ,  0.01340413,  0.        ,  0.        ])
 
@@ -294,14 +319,14 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
 
         >>> params = np.array([1.7, 1.0, 0.5], requires_grad=True)
         >>> ops = [
-        ...     qml.RX(params[0], wires=0),
-        ...     qml.RY(params[1], wires=0),
-        ...     qml.CNOT(wires=(0,1)),
-        ...     qml.PhaseShift(params[2], wires=1),
+        ...     qp.RX(params[0], wires=0),
+        ...     qp.RY(params[1], wires=0),
+        ...     qp.CNOT(wires=(0,1)),
+        ...     qp.PhaseShift(params[2], wires=1),
         ...     ]
-        >>> measurements = [qml.expval(qml.X(0))]
-        >>> tape = qml.tape.QuantumTape(ops, measurements)
-        >>> tapes, fn = qml.metric_tensor(tape)
+        >>> measurements = [qp.expval(qp.X(0))]
+        >>> tape = qp.tape.QuantumTape(ops, measurements)
+        >>> tapes, fn = qp.metric_tensor(tape)
         >>> tapes
         [<QuantumTape: wires=[0, 1], params=0>,
          <QuantumTape: wires=[0, 1], params=1>,
@@ -318,8 +343,8 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
         The output tapes can then be evaluated and post-processed to retrieve
         the metric tensor:
 
-        >>> dev = qml.device("default.qubit", wires=3)
-        >>> fn(qml.execute(tapes, dev, None))
+        >>> dev = qp.device("default.qubit", wires=3)
+        >>> fn(qp.execute(tapes, dev, None))
         tensor([[ 0.25      ,  0.        ,  0.42073549],
                 [ 0.        ,  0.00415023, -0.26517488],
                 [ 0.42073549, -0.26517488,  0.24878844]], requires_grad=True)
@@ -356,18 +381,18 @@ def metric_tensor(  # pylint:disable=too-many-arguments, too-many-positional-arg
 
         .. code-block:: python
 
-            dev = qml.device("default.qubit")
-            @qml.qnode(dev, interface="autograd")
+            dev = qp.device("default.qubit")
+            @qp.qnode(dev, interface="autograd")
             def circuit(weights):
-                qml.RX(weights[1], wires=0)
-                qml.RY(weights[0], wires=0)
-                qml.CNOT(wires=[0, 1])
-                qml.RZ(weights[2], wires=1)
-                qml.RZ(weights[3], wires=0)
-                return qml.expval(qml.Z(0))
+                qp.RX(weights[1], wires=0)
+                qp.RY(weights[0], wires=0)
+                qp.CNOT(wires=[0, 1])
+                qp.RZ(weights[2], wires=1)
+                qp.RZ(weights[3], wires=0)
+                return qp.expval(qp.Z(0))
 
             weights = np.array([0.1, 0.2, 0.4, 0.5], requires_grad=True)
-            mt = qml.metric_tensor(circuit, argnum=(0, 2, 3))(weights)
+            mt = qp.metric_tensor(circuit, argnum=(0, 2, 3))(weights)
 
         >>> print(mt)
         [[ 0.          0.          0.          0.        ]
@@ -568,7 +593,7 @@ def _get_gen_op(op, allow_nonunitary, aux_wire):
         aux_wire (int or pennylane.wires.Wires): Auxiliary wire on which to control the operation
 
     Returns
-        qml.Operation: Controlled-generator operation of the generator of ``op``, controlled
+        qp.Operation: Controlled-generator operation of the generator of ``op``, controlled
         on wire ``aux_wire``.
 
     Raises

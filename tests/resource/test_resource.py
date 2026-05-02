@@ -14,13 +14,14 @@
 """
 Test base Resource class and its associated methods
 """
+
 # pylint: disable=unnecessary-dunder-call
 from collections import defaultdict
 from dataclasses import FrozenInstanceError
 
 import pytest
 
-import pennylane as qml
+import pennylane as qp
 from pennylane.measurements import Shots
 from pennylane.operation import Operation
 from pennylane.resource.resource import (
@@ -28,6 +29,7 @@ from pennylane.resource.resource import (
     Resources,
     ResourcesOperation,
     SpecsResources,
+    _batch_num_to_letters,
     _combine_dict,
     _count_resources,
     _scale_dict,
@@ -620,12 +622,12 @@ def test_specs_compute_depth(compute_depth):
     """Test that depth is skipped with `resources_from_tape`."""
 
     ops = [
-        qml.RX(0.432, wires=0),
-        qml.Rot(0.543, 0, 0.23, wires=0),
-        qml.CNOT(wires=[0, "a"]),
-        qml.RX(0.133, wires=4),
+        qp.RX(0.432, wires=0),
+        qp.Rot(0.543, 0, 0.23, wires=0),
+        qp.CNOT(wires=[0, "a"]),
+        qp.RX(0.133, wires=4),
     ]
-    obs = [qml.expval(qml.PauliX(wires="a")), qml.probs(wires=[0, "a"])]
+    obs = [qp.expval(qp.PauliX(wires="a")), qp.probs(wires=[0, "a"])]
 
     tape = QuantumScript(ops=ops, measurements=obs)
     resources = resources_from_tape(tape, compute_depth=compute_depth)
@@ -705,6 +707,7 @@ class TestSpecsResources:
         s = self.example_specs_resource()
 
         assert s["gate_types"] == s.gate_types
+        assert s["gate_counts"] == s.gate_types
         assert s["gate_sizes"] == s.gate_sizes
         assert s["measurements"] == s.measurements
         assert s["num_allocs"] == s.num_allocs
@@ -736,16 +739,14 @@ class TestSpecsResources:
 
         s = self.example_specs_resource()
 
-        expected = "Total wire allocations: 2\n"
+        expected = "Wire allocations: 2\n"
         expected += "Total gates: 3\n"
-        expected += "Circuit depth: 2\n"
-        expected += "\n"
-        expected += "Gate types:\n"
-        expected += "  Hadamard: 2\n"
-        expected += "  CNOT: 1\n"
-        expected += "\n"
+        expected += "Gate counts:\n"
+        expected += "- Hadamard: 2\n"
+        expected += "- CNOT: 1\n"
         expected += "Measurements:\n"
-        expected += "  expval(PauliZ): 1"
+        expected += "- expval(PauliZ): 1\n"
+        expected += "Depth: 2"
 
         expected_indented = ("    " + expected.replace("\n", "\n    ")).replace("\n    \n", "\n\n")
 
@@ -757,15 +758,13 @@ class TestSpecsResources:
 
         s = SpecsResources(gate_types={}, gate_sizes={}, measurements={}, num_allocs=0)
 
-        expected = "Total wire allocations: 0\n"
+        expected = "Wire allocations: 0\n"
         expected += "Total gates: 0\n"
-        expected += "Circuit depth: Not computed\n"
-        expected += "\n"
-        expected += "Gate types:\n"
-        expected += "  No gates.\n"
-        expected += "\n"
+        expected += "Gate counts:\n"
+        expected += "- No gates.\n"
         expected += "Measurements:\n"
-        expected += "  No measurements."
+        expected += "- No measurements.\n"
+        expected += "Depth: Not computed"
 
         expected_indented = ("    " + expected.replace("\n", "\n    ")).replace("\n    \n", "\n\n")
 
@@ -814,7 +813,7 @@ class TestCircuitSpecs:
             device_name="default.qubit",
             num_device_wires=5,
             shots=Shots(1000),
-            level=[1, 2],
+            level={1: "l1", 2: "l2"},
             resources={
                 1: SpecsResources(
                     gate_types={"Hadamard": 4, "CNOT": 2},
@@ -928,7 +927,7 @@ class TestCircuitSpecs:
             "device_name": "default.qubit",
             "num_device_wires": 5,
             "shots": Shots(1000),
-            "level": [1, 2],
+            "level": {1: "l1", 2: "l2"},
             "resources": {
                 1: {
                     "gate_types": {"Hadamard": 4, "CNOT": 2},
@@ -971,35 +970,56 @@ class TestCircuitSpecs:
         expected += "Shots: Shots(total=1000)\n"
         expected += "Level: 2\n"
         expected += "\n"
-        expected += "Resource specifications:\n"
-        expected += r.resources.to_pretty_str(preindent=2)
+        expected += r.resources.to_pretty_str()
 
         assert str(r) == expected
 
-    def test_str_multi(self):
-        """Test the string representation of a CircuitSpecs instance."""
+    def test_str_multi_tabular(self):
+        """Test the tabular string representation of a CircuitSpecs instance."""
 
+        r = self.example_specs_result_multi()
+        assert [x.strip() for x in str(r).split()] == [x.strip() for x in """Device: default.qubit
+Device wires: 5
+Shots: Shots(total=1000)
+Levels:
+- 1: l1
+- 2: l2
+
+↓Metric   Level→ |    1 |  2-a |  2-b
+-------------------------------------
+Wire allocations |    2 |    2 |    2
+Total gates      |    6 |    1 |    1
+Gate counts:     |
+- Hadamard       |    4 |    0 |    0
+- CNOT           |    2 |    1 |    1
+Measurements:    |
+- expval(PauliX) |    1 |    1 |    0
+- expval(PauliZ) |    1 |    0 |    1""".split()]
+
+    def test_str_multi_non_tabular(self):
+        """Test the non-tabular string representation of a CircuitSpecs instance."""
         r = self.example_specs_result_multi()
 
         expected = "Device: default.qubit\n"
         expected += "Device wires: 5\n"
         expected += "Shots: Shots(total=1000)\n"
-        expected += "Level: [1, 2]\n"
-        expected += "\n"
-        expected += "Resource specifications:\n"
+        expected += "Levels:\n"
+        expected += "- 1: l1\n"
+        expected += "- 2: l2\n"
+        expected += "\n\n"
 
         expected += "Level = 1:\n"
-        expected += r.resources[1].to_pretty_str(preindent=2)
+        expected += r.resources[1].to_pretty_str(preindent=4)
 
         expected += "\n\n" + "-" * 60 + "\n\n"
 
         expected += "Level = 3:\n"
-        expected += "  Batched tape 0:\n"
-        expected += r.resources[3][0].to_pretty_str(preindent=4)
-        expected += "\n\n  Batched tape 1:\n"
-        expected += r.resources[3][1].to_pretty_str(preindent=4)
+        expected += "    Batched tape a:\n"
+        expected += r.resources[3][0].to_pretty_str(preindent=8)
+        expected += "\n\n    Batched tape b:\n"
+        expected += r.resources[3][1].to_pretty_str(preindent=8)
 
-        assert str(r) == expected
+        assert r.to_pretty_str(tabular=False) == expected
 
 
 class TestCountResources:
@@ -1023,34 +1043,34 @@ class TestCountResources:
     scripts = (
         QuantumScript(ops=[], measurements=[]),
         QuantumScript(
-            ops=[qml.Hadamard(0), qml.CNOT([0, 1])], measurements=[qml.expval(qml.PauliZ(0))]
+            ops=[qp.Hadamard(0), qp.CNOT([0, 1])], measurements=[qp.expval(qp.PauliZ(0))]
         ),
         QuantumScript(
-            ops=[qml.PauliZ(0), qml.CNOT([0, 1]), qml.RX(1.23, 2)],
-            measurements=[qml.expval(qml.exp(qml.PauliZ(0)))],
+            ops=[qp.PauliZ(0), qp.CNOT([0, 1]), qp.RX(1.23, 2)],
+            measurements=[qp.expval(qp.exp(qp.PauliZ(0)))],
             shots=Shots(10),
         ),
         QuantumScript(
             ops=[
-                qml.PauliZ(0),
-                qml.CNOT([0, 1]),
-                qml.RX(1.23, 2),
+                qp.PauliZ(0),
+                qp.CNOT([0, 1]),
+                qp.RX(1.23, 2),
                 _CustomOpWithResource(wires=[0, 2]),
                 _CustomOpWithoutResource(wires=[0, 1]),
             ],
-            measurements=[qml.probs()],
+            measurements=[qp.probs()],
         ),
         QuantumScript(
             ops=[
-                qml.ctrl(op=qml.IsingXX(0.5, wires=[10, 11]), control=range(10)),
-                qml.ctrl(op=qml.IsingXX(0.5, wires=[10, 11]), control=range(5)),
-                qml.ctrl(op=qml.IsingXX(0.5, wires=[10, 11]), control=[0]),
-                qml.CNOT([0, 1]),
-                qml.Toffoli([0, 1, 2]),
-                qml.ctrl(op=qml.PauliX(10), control=[0]),
-                qml.ctrl(op=qml.PauliX(10), control=[0, 1]),
+                qp.ctrl(op=qp.IsingXX(0.5, wires=[10, 11]), control=range(10)),
+                qp.ctrl(op=qp.IsingXX(0.5, wires=[10, 11]), control=range(5)),
+                qp.ctrl(op=qp.IsingXX(0.5, wires=[10, 11]), control=[0]),
+                qp.CNOT([0, 1]),
+                qp.Toffoli([0, 1, 2]),
+                qp.ctrl(op=qp.PauliX(10), control=[0]),
+                qp.ctrl(op=qp.PauliX(10), control=[0, 1]),
             ],
-            measurements=[qml.probs()],
+            measurements=[qp.probs()],
         ),
     )
 
@@ -1095,3 +1115,14 @@ class TestCountResources:
         )
 
         assert computed_resources == expected_resources
+
+
+def test_batch_num_to_letters():
+    """Test the _batch_num_to_letters helper function."""
+    assert _batch_num_to_letters(0) == "a"
+    assert _batch_num_to_letters(1) == "b"
+    assert _batch_num_to_letters(25) == "z"
+    assert _batch_num_to_letters(26) == "aa"
+    assert _batch_num_to_letters(27) == "ab"
+    assert _batch_num_to_letters(51) == "az"
+    assert _batch_num_to_letters(52) == "ba"

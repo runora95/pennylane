@@ -18,7 +18,8 @@ Contains the QSVT template and qsvt wrapper function.
 import copy
 from collections import defaultdict
 from collections.abc import Sequence
-from functools import reduce
+from functools import partial, reduce
+from importlib import import_module, util
 from typing import Literal
 
 import numpy as np
@@ -26,12 +27,8 @@ import scipy
 from numpy.polynomial import Polynomial, chebyshev
 
 from pennylane import math, ops, pytrees
-from pennylane.decomposition import (
-    add_decomps,
-    adjoint_resource_rep,
-    register_resources,
-    resource_rep,
-)
+from pennylane.decomposition import add_decomps, register_resources, resource_rep
+from pennylane.decomposition.resources import change_op_basis_resource_rep
 from pennylane.operation import Operation, Operator
 from pennylane.queuing import QueuingManager, apply
 from pennylane.typing import TensorLike
@@ -41,6 +38,31 @@ from .fable import FABLE
 from .prepselprep import PrepSelPrep
 from .qubitization import Qubitization
 
+if util.find_spec("jax") is not None:
+    jax = import_module("jax")
+    is_jax_available = True
+else:  # pragma: no cover
+    is_jax_available = False
+    jax = None
+
+if util.find_spec("optax") is not None:  # pragma: no cover
+    optax = import_module("optax")
+    is_optax_available = True
+else:
+    is_optax_available = False
+    optax = None
+
+
+def jit_if_jax_available(f, **kwargs):
+    r"""thin wrapper around jax.jit
+    that jit the function if jax is available
+    otherwise return the input function
+    """
+
+    if is_jax_available:
+        return jax.jit(f, **kwargs)
+    return f  # pragma: no cover
+
 
 def _pauli_rep_process(A, poly, encoding_wires, block_encoding, angle_solver="root-finding"):
 
@@ -49,7 +71,7 @@ def _pauli_rep_process(A, poly, encoding_wires, block_encoding, angle_solver="ro
             f"block_encoding = {block_encoding} not supported for A of type {type(A)}. "
             "When A is a Hamiltonian or has a Pauli decomposition, block_encoding should "
             "take the value 'prepselprep' or 'qubitization'. Otherwise, please provide the "
-            "matrix of the Hamiltonian as input. For more details, see the 'qml.matrix' function."
+            "matrix of the Hamiltonian as input. For more details, see the 'qp.matrix' function."
         )
 
     if any(wire in Wires(encoding_wires) for wire in A.wires):
@@ -79,7 +101,7 @@ def _tensorlike_process(A, poly, encoding_wires, block_encoding, angle_solver="r
             f"block_encoding = {block_encoding} not supported for A of type {type(A)}."
             "When A is a matrix block_encoding should take the value 'embedding' or 'fable'. "
             "Otherwise, please provide an input with a Pauli decomposition. For more details, "
-            "see the 'qml.pauli_decompose' function."
+            "see the 'qp.pauli_decompose' function."
         )
 
     # compute angles
@@ -97,7 +119,7 @@ def _tensorlike_process(A, poly, encoding_wires, block_encoding, angle_solver="r
 
         # FABLE encodes A / 2^n, need to rescale to obtain desired block-encoding
 
-        fable_norm = int(np.ceil(np.log2(max_dimension)))
+        fable_norm = math.ceil_log2(max_dimension)
         encoding = FABLE(2**fable_norm * A, wires=encoding_wires)
 
         projectors = [ops.PCPhase(angle, dim=len(A), wires=encoding_wires) for angle in angles]
@@ -171,7 +193,13 @@ def qsvt(
             via :func:`poly_to_angles <pennylane.poly_to_angles>`. Options include:
 
             - ``"root-finding"``: effective for polynomials of degree up to :math:`\sim 1000`
-            - ``"iterative"``: effective for polynomials of degree higher than :math:`\sim 1000`
+            - ``"iterative"`` (Default): Effective for polynomials of degree higher than :math:`\sim 1000` for
+              the ``"QSP"`` and ``"QSVT"`` routines. Uses Scipy (L-BFGS-B).
+            - ``"iterative-optax"``: Recommended for high-degree polynomials
+              **when using polynomials of the same degree and running repeatedly**;
+              may be slower for a single run due to JIT compilation overhead.
+              Uses JAX and Optax. Requires ``jax`` and ``optax`` installed
+              and JAX enabled in 64-bit mode. 
 
     Returns:
         (Operator): A quantum operator implementing QSVT on the matrix ``A`` with the
@@ -186,18 +214,18 @@ def qsvt(
         # P(x) = -x + 0.5 x^3 + 0.5 x^5
         poly = np.array([0, -1, 0, 0.5, 0, 0.5])
 
-        hamiltonian = qml.dot([0.3, 0.7], [qml.Z(1), qml.X(1) @ qml.Z(2)])
+        hamiltonian = qp.dot([0.3, 0.7], [qp.Z(1), qp.X(1) @ qp.Z(2)])
 
-        dev = qml.device("default.qubit")
+        dev = qp.device("default.qubit")
 
 
-        @qml.qnode(dev)
+        @qp.qnode(dev)
         def circuit():
-            qml.qsvt(hamiltonian, poly, encoding_wires=[0], block_encoding="prepselprep")
-            return qml.state()
+            qp.qsvt(hamiltonian, poly, encoding_wires=[0], block_encoding="prepselprep")
+            return qp.state()
 
 
-        matrix = qml.matrix(circuit, wire_order=[0, 1, 2])()
+        matrix = qp.matrix(circuit, wire_order=[0, 1, 2])()
 
     >>> print(matrix[:4, :4].real) # doctest: +SKIP
     [[-0.1625  0.     -0.3793  0.    ]
@@ -221,17 +249,17 @@ def qsvt(
             # P(x) = -1 + 0.2 x^2 + 0.5 x^4
             poly = np.array([-1, 0, 0.2, 0, 0.5])
 
-            hamiltonian = qml.dot([0.3, 0.4, 0.3], [qml.Z(2), qml.X(2) @ qml.Z(3), qml.X(2)])
+            hamiltonian = qp.dot([0.3, 0.4, 0.3], [qp.Z(2), qp.X(2) @ qp.Z(3), qp.X(2)])
 
-            dev = qml.device("default.qubit")
+            dev = qp.device("default.qubit")
 
-            @qml.qnode(dev)
+            @qp.qnode(dev)
             def circuit():
-                qml.qsvt(hamiltonian, poly, encoding_wires=[0, 1], block_encoding="prepselprep")
-                return qml.state()
+                qp.qsvt(hamiltonian, poly, encoding_wires=[0, 1], block_encoding="prepselprep")
+                return qp.state()
 
 
-            matrix = qml.matrix(circuit, wire_order=[0, 1, 2, 3])()
+            matrix = qp.matrix(circuit, wire_order=[0, 1, 2, 3])()
 
         >>> print(np.round(matrix[:4, :4], 4).real) # doctest: +SKIP
         [[-0.7158  0.     -0.      0.    ]
@@ -252,14 +280,14 @@ def qsvt(
 
             A = np.array([[-0.1, 0, 0, 0.1], [0, 0.2, 0, 0], [0, 0, -0.2, -0.2], [0.1, 0, -0.2, -0.1]])
 
-            dev = qml.device("default.qubit")
+            dev = qp.device("default.qubit")
 
-            @qml.qnode(dev)
+            @qp.qnode(dev)
             def circuit():
-                qml.qsvt(A, poly, encoding_wires=[0, 1, 2, 3, 4], block_encoding="fable")
-                return qml.state()
+                qp.qsvt(A, poly, encoding_wires=[0, 1, 2, 3, 4], block_encoding="fable")
+                return qp.state()
 
-            matrix = qml.matrix(circuit, wire_order=[0, 1, 2, 3, 4])()
+            matrix = qp.matrix(circuit, wire_order=[0, 1, 2, 3, 4])()
 
         >>> print(np.round(matrix[:4, :4], 4).real) # doctest: +SKIP
         [[-0.0954  0.     -0.0056 -0.0054]
@@ -357,29 +385,31 @@ class QSVT(Operation):
 
     To implement QSVT in a circuit, we can use the following method:
 
-    >>> dev = qml.device("default.qubit", wires=[0])
-    >>> block_encoding = qml.Hadamard(wires=0)  # note H is a block encoding of 1/sqrt(2)
-    >>> phase_shifts = [qml.RZ(-2 * theta, wires=0) for theta in (1.23, -0.5, 4)]  # -2*theta to match convention
+    >>> dev = qp.device("default.qubit", wires=[0])
+    >>> block_encoding = qp.Hadamard(wires=0)  # note H is a block encoding of 1/sqrt(2)
+    >>> phase_shifts = [qp.RZ(-2 * theta, wires=0) for theta in (1.23, -0.5, 4)]  # -2*theta to match convention
 
-    >>> @qml.qnode(dev)
+    >>> @qp.qnode(dev)
     ... def example_circuit():
-    ...     qml.QSVT(block_encoding, phase_shifts)
-    ...     return qml.expval(qml.Z(0))
-    ... 
-    
+    ...     qp.QSVT(block_encoding, phase_shifts)
+    ...     return qp.expval(qp.Z(0))
+    ...
+
     >>> example_circuit()
     np.float64(0.5403...)
 
     We can visualize the circuit as follows:
 
-    >>> print(qml.draw(example_circuit)())
+    >>> print(qp.draw(example_circuit)())
     0: ──QSVT─┤  <Z>
 
-    To see the implementation details, we can expand the circuit:
+    To see the implementation details, we can expand the circuit via :func:`qp.decompose <.transforms.decompose>`:
 
-    >>> q_script = qml.tape.QuantumScript(ops=[qml.QSVT(block_encoding, phase_shifts)])
-    >>> print(q_script.expand().draw(decimals=2))
-    0: ──RZ(-2.46)──(H†)@RZ(1.00)@H──RZ(-8.00)─┤
+    >>> q_script = qp.tape.QuantumScript(ops=[qp.QSVT(block_encoding, phase_shifts)])
+    >>> q_scripts, func = qp.decompose(q_script, gate_set=qp.decomposition.gate_sets.ALL_QUBIT_OPS)
+    >>> q_script = func(q_scripts)
+    >>> print(q_script.draw(decimals=2))
+    0: ──RZ(-2.46)──H──RZ(1.00)──H──RZ(-8.00)─┤
 
     See the Usage Details section for more examples on implementing QSVT with different block
     encoding methods.
@@ -404,21 +434,21 @@ class QSVT(Operation):
         .. code-block:: python
 
             poly = np.array([0, -1, 0, 0.5, 0, 0.5])
-            angles = qml.poly_to_angles(poly, "QSVT")
+            angles = qp.poly_to_angles(poly, "QSVT")
             input_matrix = np.array([[0.2, 0.1], [0.1, -0.1]])
 
             wires = [0, 1]
-            block_encode = qml.BlockEncode(input_matrix, wires=wires)
+            block_encode = qp.BlockEncode(input_matrix, wires=wires)
             projectors = [
-                qml.PCPhase(angles[i], dim=len(input_matrix), wires=wires)
+                qp.PCPhase(angles[i], dim=len(input_matrix), wires=wires)
                 for i in range(len(angles))
             ]
 
-            dev = qml.device("default.qubit")
-            @qml.qnode(dev)
+            dev = qp.device("default.qubit")
+            @qp.qnode(dev)
             def circuit():
-                qml.QSVT(block_encode, projectors)
-                return qml.state()
+                qp.QSVT(block_encode, projectors)
+                return qp.state()
 
         >>> circuit() # doctest: +SKIP
         array([-0.1942+0.6665j, -0.0979+0.3583j,  0.332 -0.5105j, -0.0955+0.0104j])
@@ -433,23 +463,23 @@ class QSVT(Operation):
         .. code-block:: python
 
             poly = np.array([0, -1, 0, 0.5, 0, 0.5])
-            H = 0.1 * qml.X(2) - 0.7 * qml.X(2) @ qml.Z(3) - 0.2 * qml.Z(2)
+            H = 0.1 * qp.X(2) - 0.7 * qp.X(2) @ qp.Z(3) - 0.2 * qp.Z(2)
 
             control_wires = [0, 1]
-            block_encode = qml.PrepSelPrep(H, control=control_wires)
-            angles = qml.poly_to_angles(poly, "QSVT")
+            block_encode = qp.PrepSelPrep(H, control=control_wires)
+            angles = qp.poly_to_angles(poly, "QSVT")
 
             projectors = [
-                qml.PCPhase(angles[i], dim=2 ** len(H.wires), wires=control_wires + H.wires)
+                qp.PCPhase(angles[i], dim=2 ** len(H.wires), wires=control_wires + H.wires)
                 for i in range(len(angles))
             ]
 
-            dev = qml.device("default.qubit")
+            dev = qp.device("default.qubit")
 
-            @qml.qnode(dev)
+            @qp.qnode(dev)
             def circuit():
-                qml.QSVT(block_encode, projectors)
-                return qml.state()
+                qp.QSVT(block_encode, projectors)
+                return qp.state()
 
         >>> circuit() # doctest: +SKIP
         array([ 1.44000000e-01+1.01511390e-01j,  0.00000000e+00+0.00000000e+00j,
@@ -591,26 +621,23 @@ class QSVT(Operation):
         """
 
         op_list = []
-        UA_adj = copy.copy(UA)
 
-        for idx, op in enumerate(projectors[:-1]):
-            if idx % 2 == 0:
-                if QueuingManager.recording():
-                    apply(op)
-                op_list.append(op)
-            else:
-                # change_op_basis would queue internally when called in a queuing context.
-                op_list.append(ops.change_op_basis(UA, op, ops.adjoint(UA_adj)))
+        op_list.append(projectors[0])
+        if QueuingManager.recording():
+            apply(projectors[0])
+
+        for i in range(1, len(projectors) - 1, 2):
+            op_list.append(ops.change_op_basis(UA, projectors[i]))
+            op_list.append(projectors[i + 1])
+            if QueuingManager.recording():
+                apply(projectors[i + 1])
 
         if len(projectors) % 2 == 0:
+            op_list.append(UA)
+            op_list.append(projectors[-1])
             if QueuingManager.recording():
                 apply(UA)
-            op_list.append(UA)
-
-        if len(projectors) > 1:
-            if QueuingManager.recording():
                 apply(projectors[-1])
-            op_list.append(projectors[-1])
 
         return op_list
 
@@ -665,17 +692,19 @@ class QSVT(Operation):
 
 def _QSVT_resources(projectors, UA):
     resources = defaultdict(int)
+    resources[resource_rep(type(projectors[0]), **projectors[0].resource_params)] = 1
+    for i in range(1, len(projectors) - 1, 2):
+        resources[
+            change_op_basis_resource_rep(
+                resource_rep(type(UA), **UA.resource_params),
+                resource_rep(type(projectors[i]), **projectors[i].resource_params),
+            )
+        ] += 1
+        resources[resource_rep(type(projectors[i + 1]), **projectors[i + 1].resource_params)] += 1
 
-    resources.update(
-        {
-            resource_rep(type(UA), **UA.resource_params): np.ceil((len(projectors) - 1) / 2),
-            adjoint_resource_rep(type(UA), base_params=UA.resource_params): (len(projectors) - 1)
-            // 2,
-        }
-    )
-
-    for op in projectors:
-        resources[resource_rep(type(op), **op.resource_params)] += 1
+    if len(projectors) % 2 == 0:
+        resources[resource_rep(type(UA), **UA.resource_params)] += 1
+        resources[resource_rep(type(projectors[0]), **projectors[0].resource_params)] += 1
 
     return dict(resources)
 
@@ -683,15 +712,15 @@ def _QSVT_resources(projectors, UA):
 @register_resources(_QSVT_resources)
 def _QSVT_decomposition(*_data, UA, projectors, **_kwargs):
 
-    for idx, op in enumerate(projectors[:-1]):
-        pytrees.unflatten(*pytrees.flatten(op))
+    pytrees.unflatten(*pytrees.flatten(projectors[0]))
 
-        if idx % 2 == 0:
-            pytrees.unflatten(*pytrees.flatten(UA))
-        else:
-            ops.adjoint(UA)
+    for i in range(1, len(projectors) - 1, 2):
+        ops.change_op_basis(UA, projectors[i])
+        pytrees.unflatten(*pytrees.flatten(projectors[i + 1]))
 
-    pytrees.unflatten(*pytrees.flatten(projectors[-1]))
+    if len(projectors) % 2 == 0:
+        pytrees.unflatten(*pytrees.flatten(UA))
+        pytrees.unflatten(*pytrees.flatten(projectors[-1]))
 
 
 add_decomps(QSVT, _QSVT_decomposition)
@@ -808,6 +837,7 @@ def _compute_qsp_angle(poly_coeffs):
     return rotation_angles
 
 
+@jit_if_jax_available
 def _cheby_pol(x, degree):
     r"""Return the value of the Chebyshev polynomial cos(degree*arcos(x)) at point x
 
@@ -821,7 +851,7 @@ def _cheby_pol(x, degree):
     return math.cos(degree * math.arccos(x))
 
 
-def _poly_func(coeffs, parity, x):
+def _poly_func_scipy(coeffs, parity, x):
     r"""Evaluate a polynomial function of a given parity expressed in the Chebyshev basis at value x
 
     Args:
@@ -832,11 +862,11 @@ def _poly_func(coeffs, parity, x):
     Returns:
         float: \sum c_kT_{2k} if even else \sum c_kT_{2k+1} if odd where T_k(x)=cos(k \arccos(x))
     """
-
     ind = math.arange(len(coeffs))
-    return sum(coeffs[i] * _cheby_pol(x, degree=2 * i + parity) for i in ind)
+    return coeffs @ np.vectorize(_cheby_pol, excluded={"x"})(x, 2 * ind + parity)
 
 
+@partial(jit_if_jax_available, static_argnames=["interface"])
 def _z_rotation(phi, interface):
     r"""Returns the matrix of the `RZ(2 \phi)` gate.
 
@@ -846,10 +876,10 @@ def _z_rotation(phi, interface):
     Returns:
         tensor_like: Z rotation matrix
     """
-
     return math.array([[math.exp(1j * phi), 0.0], [0.0, math.exp(-1j * phi)]], like=interface)
 
 
+@partial(jit_if_jax_available, static_argnames=["interface"])
 def _W_of_x(x, interface):
     r"""Returns the matrix of the operator W(x) defined in Theorem (1) of https://arxiv.org/pdf/2002.11649
 
@@ -859,16 +889,22 @@ def _W_of_x(x, interface):
     Returns:
         tensor_like: 2x2 matrix of W(x)
     """
-
     return math.array(
         [
-            [_cheby_pol(x=x, degree=1.0), 1j * math.sqrt(1 - _cheby_pol(x=x, degree=1.0) ** 2)],
-            [1j * math.sqrt(1 - _cheby_pol(x=x, degree=1.0) ** 2), _cheby_pol(x=x, degree=1.0)],
+            [
+                _cheby_pol(x=x, degree=1.0),
+                1j * math.sqrt(1 - _cheby_pol(x=x, degree=1.0) ** 2),
+            ],
+            [
+                1j * math.sqrt(1 - _cheby_pol(x=x, degree=1.0) ** 2),
+                _cheby_pol(x=x, degree=1.0),
+            ],
         ],
         like=interface,
     )
 
 
+@partial(jit_if_jax_available, static_argnames=["interface"])
 def _qsp_iterate(phi, x, interface):
     r"""
     Signal operator defined as the product of RZ(phi) and W(x)
@@ -880,11 +916,10 @@ def _qsp_iterate(phi, x, interface):
     Returns:
         tensor_like: 2x2 matrix of operator defined in Theorem (1) of https://arxiv.org/pdf/2002.11649
     """
-
-    a = math.dot(_W_of_x(x=x, interface=interface), _z_rotation(phi=phi, interface=interface))
-    return a
+    return math.dot(_W_of_x(x=x, interface=interface), _z_rotation(phi=phi, interface=interface))
 
 
+@partial(jit_if_jax_available, static_argnames=["interface"])
 def _qsp_iterate_broadcast(phis, x, interface):
     r"""Eq (13) Resulting unitary of the QSP circuit (on reduced invariant subspace ofc)
 
@@ -894,7 +929,6 @@ def _qsp_iterate_broadcast(phis, x, interface):
     Returns:
         tensor_like: 2x2 block-encoding of polynomial implemented by the angles phi
     """
-
     # pylint: disable=import-outside-toplevel
     try:
         from jax import vmap
@@ -912,26 +946,10 @@ def _qsp_iterate_broadcast(phis, x, interface):
     return math.real(matrix_iterate[0, 0])
 
 
-def _grid_pts(degree, interface):
-    r"""Generate the grid: x_j = cos(\frac{(2j-1)\pi}{4\tilde{d}}) over which the polynomials
-    are evaluated and the optimization is carried defined in page 8 (https://arxiv.org/pdf/2002.11649)
-
-    Args:
-        degree (int): degree of polynomial function
-
-    Returns:
-        tensor_like: optimization grid points
-    """
-
-    d = (degree + 1) // 2 + (degree + 1) % 2
-    return math.array(
-        [math.cos((2 * j - 1) * np.pi / (4 * d)) for j in range(1, d + 1)], like=interface
-    )
-
-
-def _qsp_optimization(degree, coeffs_target_func, interface=None):
+def _qsp_optimization_scipy(degree, coeffs_target_func, interface=None):
     r"""
-    Algorithm 1 in https://arxiv.org/pdf/2002.11649 produces the angle parameters by minimizing the distance between the target and qsp polynomial over the grid
+    Algorithm 1 in https://arxiv.org/pdf/2002.11649 produces the angle parameters by minimizing
+    the distance between the target and qsp polynomial over the grid
 
     Args:
         degree (int): degree of polynomial function
@@ -956,7 +974,7 @@ def _qsp_optimization(degree, coeffs_target_func, interface=None):
     initial_guess = [np.pi / 4] + [0.0] * (degree - 1) + [np.pi / 4]
     initial_guess = math.array(initial_guess, like=interface)
 
-    targets = [_poly_func(coeffs=coeffs_target_func, x=x, parity=parity) for x in grid_points]
+    targets = [_poly_func_scipy(coeffs=coeffs_target_func, x=x, parity=parity) for x in grid_points]
     targets = math.array(targets, like=interface)
 
     def obj_function(phi):
@@ -1001,8 +1019,11 @@ def _qsp_optimization(degree, coeffs_target_func, interface=None):
     return phis, cost_func
 
 
-def _compute_qsp_angles_iteratively(poly):
-    """Calculates the angles given a polynomial in canonical base
+def _compute_qsp_angles_iteratively_scipy(poly):
+    """Calculates the angles given a polynomial in canonical base using Scipy optimizer.
+
+    This is the legacy implementation that uses scipy.optimize.minimize with L-BFGS-B.
+    It has no mandatory dependencies beyond numpy/scipy.
 
     Args:
         poly (tensor_like): coefficients of the polynomial ordered from lowest to highest power
@@ -1018,8 +1039,149 @@ def _compute_qsp_angles_iteratively(poly):
     else:
         coeffs_target_func = math.array(coeffs_odd)
 
-    angles, *_ = _qsp_optimization(degree=degree, coeffs_target_func=coeffs_target_func)
+    angles, *_ = _qsp_optimization_scipy(degree=degree, coeffs_target_func=coeffs_target_func)
 
+    return angles
+
+
+@jit_if_jax_available
+def _poly_func_optax(coeffs, x):
+    r"""\sum c_kT_{k}(x) where T_k(x)=cos(karccos(x))"""
+    return jax.numpy.sum(
+        coeffs @ jax.vmap(_cheby_pol, in_axes=(None, 0))(x, np.arange(coeffs.shape[0]))
+    )
+
+
+def _grid_pts(degree, interface):
+    r"""Generate the grid: x_j = cos(\frac{(2j-1)\pi}{4\tilde{d}}) over which the polynomials
+    are evaluated and the optimization is carried defined in page 8 (https://arxiv.org/pdf/2002.11649)
+
+    Args:
+        degree (int): degree of polynomial function
+
+    Returns:
+        tensor_like: optimization grid points
+    """
+    d = (degree + 1) // 2 + (degree + 1) % 2
+    return math.array(
+        [math.cos((2 * j - 1) * np.pi / (4 * d)) for j in range(1, d + 1)], like=interface
+    )
+
+
+@jit_if_jax_available
+def _obj_function_optax(phi, x, y):
+    r"""Objective function to be optimized in Equation (23)
+
+    Args:
+        phi (tensor_like): optimization parameters
+        x (tensor_like): grid points over which we optimize
+        y (tensor_like): expected values
+
+    Returns:
+        float: \frac{\|f_\Phi(x) - y\|^2}{N}
+    """
+    # pylint: disable=import-outside-toplevel,redefined-outer-name
+    import jax
+
+    obj_func = jax.vmap(_qsp_iterate_broadcast, in_axes=(None, 0, None))(phi, x, "jax") - y
+    obj_func = jax.numpy.dot(obj_func, obj_func)
+    return 1 / x.shape[0] * obj_func
+
+
+@partial(jit_if_jax_available, static_argnames=["maxiter", "tol"])
+def _optax_lbfgs_opt(initial_guess, x, y, maxiter, tol):
+    """Dispatch optimization to the L-BFGS of optax."""
+    # pylint: disable=import-outside-toplevel,redefined-outer-name
+    import jax
+    import optax
+
+    opt = optax.lbfgs()
+    init_carry = (initial_guess, opt.init(initial_guess))
+
+    def lambda_obj_function(phi):
+        return _obj_function_optax(phi, x=x, y=y)
+
+    val_and_grad = optax.value_and_grad_from_state(lambda_obj_function)
+
+    def optimizer_iter_update(carry):
+        params, state = carry
+        val, g = val_and_grad(params, state=state)
+        updates, state = opt.update(
+            g, state, params, value=val, grad=g, value_fn=lambda_obj_function
+        )
+        params = optax.apply_updates(params, updates)
+        return (params, state)
+
+    def while_loop_cond(params):
+        _, state = params
+        num_iter = optax.tree.get(state, "count")
+        cost_val = optax.tree.get(state, "value")
+        return (num_iter == 0) | ((num_iter < maxiter) & (cost_val > tol))
+
+    carry = jax.lax.while_loop(while_loop_cond, optimizer_iter_update, init_carry)
+    return carry[0]
+
+
+def _qsp_optimization_optax(degree: int, coeffs_target_func, maxiter=100, tol=1e-30):
+    r"""Algorithm 1 in https://arxiv.org/pdf/2002.11649 produces the angle parameters by
+    minimizing the distance between the target and qsp polynomial over the grid.
+    """
+    # pylint: disable=import-outside-toplevel,redefined-outer-name
+    import jax
+
+    grid_points = _grid_pts(degree, "jax")
+    initial_guess = [np.pi / 4] + [0.0] * (degree - 1) + [np.pi / 4]
+
+    initial_guess = jax.numpy.array(initial_guess)
+    targets = jax.vmap(_poly_func_optax, in_axes=(None, 0))(coeffs_target_func, grid_points)
+
+    opt_params = _optax_lbfgs_opt(initial_guess, grid_points, targets, maxiter, tol)
+    cost_fun = _obj_function_optax(opt_params, grid_points, targets)
+
+    return opt_params, cost_fun
+
+
+def _compute_qsp_angles_iteratively_optax(poly):
+    """Calculates the angles given a polynomial in canonical base using Optax optimizer.
+
+    This is the implementation contributed in PR #8685.
+    Requires JAX and Optax to be installed.
+
+    Args:
+        poly (tensor_like): coefficients of the polynomial ordered from lowest to highest power
+
+    Raises:
+        ModuleNotFoundError: if JAX or Optax are not installed
+    """
+    if not is_jax_available:
+        raise ModuleNotFoundError("jax is required!")  # pragma: no cover
+
+    if not is_optax_available:
+        raise ModuleNotFoundError("optax is required!")  # pragma: no cover
+
+    poly_cheb = chebyshev.poly2cheb(poly)
+    degree = len(poly_cheb) - 1
+
+    # Separate the odd and even parts
+    # Replacing the odd/even items by 0 for odd/even parts of the polynomial allows to keep the same array shape
+    # Therefore we avoid second jit-compilation that was triggered if we were to
+    # extract the odd/even coeff arrays separately!
+    coeffs_odd = jax.numpy.copy(poly_cheb)
+    coeffs_odd = coeffs_odd.at[0::2].set(0.0)
+
+    coeffs_even = jax.numpy.copy(poly_cheb)
+    coeffs_even = coeffs_even.at[1::2].set(0.0)
+
+    if np.allclose(coeffs_odd, np.zeros_like(coeffs_odd)):
+        coeffs_target_func = math.array(coeffs_even)
+        degree_even = degree - degree % 2
+        degree = degree_even
+    else:
+        coeffs_target_func = math.array(coeffs_odd)
+        degree_odd = degree + (degree % 2 - 1)
+        degree = degree_odd
+
+    angles, *_ = _qsp_optimization_optax(degree=degree, coeffs_target_func=coeffs_target_func)
     return angles
 
 
@@ -1107,7 +1269,7 @@ def transform_angles(angles, routine1, routine2):
     .. code-block::
 
         >>> qsp_angles = np.array([0.2, 0.3, 0.5])
-        >>> qsvt_angles = qml.transform_angles(qsp_angles, "QSP", "QSVT")
+        >>> qsvt_angles = qp.transform_angles(qsp_angles, "QSP", "QSVT")
         >>> print(qsvt_angles)
         [-6.868...  1.870... -0.285...]
 
@@ -1122,22 +1284,22 @@ def transform_angles(angles, routine1, routine2):
 
             poly = np.array([0, 1.0, 0, -1/2, 0, 1/3])
 
-            qsp_angles = qml.poly_to_angles(poly, "QSP")
-            qsvt_angles = qml.transform_angles(qsp_angles, "QSP", "QSVT")
+            qsp_angles = qp.poly_to_angles(poly, "QSP")
+            qsvt_angles = qp.transform_angles(qsp_angles, "QSP", "QSVT")
 
             x = 0.2
 
             # Encodes x in the top left of the matrix
-            block_encoding = qml.RX(2 * np.arccos(x), wires=0)
+            block_encoding = qp.RX(2 * np.arccos(x), wires=0)
 
-            projectors = [qml.PCPhase(angle, dim=1, wires=0) for angle in qsvt_angles]
+            projectors = [qp.PCPhase(angle, dim=1, wires=0) for angle in qsvt_angles]
 
-            @qml.qnode(qml.device("default.qubit"))
+            @qp.qnode(qp.device("default.qubit"))
             def circuit_qsvt():
-                qml.QSVT(block_encoding, projectors)
-                return qml.state()
+                qp.QSVT(block_encoding, projectors)
+                return qp.state()
 
-            output = qml.matrix(circuit_qsvt, wire_order=[0])()[0, 0]
+            output = qp.matrix(circuit_qsvt, wire_order=[0])()[0, 0]
             expected = sum(coef * (x**i) for i, coef in enumerate(poly))
 
             print("output qsvt: ", output.real)
@@ -1176,7 +1338,8 @@ def transform_angles(angles, routine1, routine2):
     )
 
 
-def poly_to_angles(poly, routine, angle_solver: Literal["root-finding"] = "root-finding"):
+# pylint: disable=unused-argument,too-many-return-statements,too-many-branches
+def poly_to_angles(poly, routine, angle_solver="root-finding", **kwargs):
     r"""
     Computes the angles needed to implement a polynomial transformation with quantum signal processing (QSP),
     quantum singular value transformation (QSVT) or generalized quantum signal processing (GQSP).
@@ -1193,15 +1356,22 @@ def poly_to_angles(poly, routine, angle_solver: Literal["root-finding"] = "root-
         angle_solver (str): Specifies the method used to calculate the angles. Options include:
 
             - ``"root-finding"``: effective for polynomials of degree up to :math:`\sim 1000`
-            - ``"iterative"``: effective for polynomials of degree higher than :math:`\sim 1000` for
-              the ``"QSP"`` and ``"QSVT"`` routines.
+            - ``"iterative"`` (Default): Effective for polynomials of degree higher than :math:`\sim 1000` for
+              the ``"QSP"`` and ``"QSVT"`` routines. Uses Scipy (L-BFGS-B).
+            - ``"iterative-optax"``: Recommended for high-degree polynomials
+              when repeatedly evaluating polynomials of the same degree;
+              may be slower for a single usage due to JIT compilation overhead.
+              Uses JAX and Optax. Requires ``jax`` and ``optax`` installed
+              and JAX enabled in 64-bit mode.
+
+        **kwargs: Additional keyword arguments passed to the underlying solver.
 
     Returns:
         (tensor-like): computed angles for the specified routine
 
     Raises:
         AssertionError: if ``poly`` is not valid
-        AssertionError: if ``routine`` or ``angle_solver`` is not supported
+        ValueError: if ``angle_solver`` is not supported
 
     **Example**
 
@@ -1210,7 +1380,7 @@ def poly_to_angles(poly, routine, angle_solver: Literal["root-finding"] = "root-
     .. code-block::
 
         >>> poly = np.array([0, 1.0, 0, -1/2, 0, 1/3])
-        >>> qsvt_angles = qml.poly_to_angles(poly, "QSVT")
+        >>> qsvt_angles = qp.poly_to_angles(poly, "QSVT")
         >>> print(qsvt_angles)
         [-5.497...  1.570...  1.570...  0.583...   1.61...  0.747...]
 
@@ -1225,20 +1395,20 @@ def poly_to_angles(poly, routine, angle_solver: Literal["root-finding"] = "root-
 
             poly = np.array([0, 1.0, 0, -1/2, 0, 1/3])
 
-            qsvt_angles = qml.poly_to_angles(poly, "QSVT")
+            qsvt_angles = qp.poly_to_angles(poly, "QSVT")
 
             x = 0.2
 
             # Encode x in the top left of the matrix
-            block_encoding = qml.RX(2 * np.arccos(x), wires=0)
-            projectors = [qml.PCPhase(angle, dim=1, wires=0) for angle in qsvt_angles]
+            block_encoding = qp.RX(2 * np.arccos(x), wires=0)
+            projectors = [qp.PCPhase(angle, dim=1, wires=0) for angle in qsvt_angles]
 
-            @qml.qnode(qml.device("default.qubit"))
+            @qp.qnode(qp.device("default.qubit"))
             def circuit_qsvt():
-                qml.QSVT(block_encoding, projectors)
-                return qml.state()
+                qp.QSVT(block_encoding, projectors)
+                return qp.state()
 
-            output = qml.matrix(circuit_qsvt, wire_order=[0])()[0, 0]
+            output = qp.matrix(circuit_qsvt, wire_order=[0])()[0, 0]
             expected = sum(coef * (x**i) for i, coef in enumerate(poly))
 
             print("output qsvt: ", output.real)
@@ -1277,19 +1447,25 @@ def poly_to_angles(poly, routine, angle_solver: Literal["root-finding"] = "root-
         if angle_solver == "root-finding":
             return transform_angles(_compute_qsp_angle(poly), "QSP", "QSVT")
         if angle_solver == "iterative":
-            return transform_angles(_compute_qsp_angles_iteratively(poly), "QSP", "QSVT")
+            return transform_angles(_compute_qsp_angles_iteratively_scipy(poly), "QSP", "QSVT")
+        if angle_solver == "iterative-optax":
+            return transform_angles(_compute_qsp_angles_iteratively_optax(poly), "QSP", "QSVT")
 
-        raise AssertionError(
-            "Invalid angle solver method. We currently support 'root-finding' and 'iterative'"
+        raise ValueError(
+            f"Invalid angle solver method: '{angle_solver}'. "
+            "Supported solvers: ['root-finding', 'iterative', 'iterative-optax']"
         )
 
     if routine == "QSP":
         if angle_solver == "root-finding":
             return _compute_qsp_angle(poly)
         if angle_solver == "iterative":
-            return _compute_qsp_angles_iteratively(poly)
-        raise AssertionError(
-            "Invalid angle solver method. Valid value is 'root-finding' and 'iterative'"
+            return _compute_qsp_angles_iteratively_scipy(poly)
+        if angle_solver == "iterative-optax":
+            return _compute_qsp_angles_iteratively_optax(poly)
+        raise ValueError(
+            f"Invalid angle solver method: '{angle_solver}'. "
+            "Supported solvers: ['root-finding', 'iterative', 'iterative-optax']"
         )
 
     if routine == "GQSP":

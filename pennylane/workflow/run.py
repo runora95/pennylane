@@ -14,6 +14,7 @@
 """
 This module contains a developer focused execution function for internal executions
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -21,11 +22,10 @@ from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING
 
-import pennylane as qml
+import pennylane as qp
 from pennylane import math
 from pennylane.exceptions import QuantumFunctionError
 from pennylane.math import Interface
-from pennylane.workflow import _cache_transform
 
 from .jacobian_products import (
     DeviceDerivatives,
@@ -55,10 +55,10 @@ def _construct_tf_autograph_pipeline(
     for the TensorFlow Autograph interface.
 
     Args:
-        config (qml.devices.ExecutionConfig): resolved execution configuration
-        device (qml.devices.Device): a Pennylane device
+        config (qp.devices.ExecutionConfig): resolved execution configuration
+        device (qp.devices.Device): a Pennylane device
 
-        inner_transform_program (qml.CompilePipeline): the transformation applied to quantum tapes
+        inner_transform_program (qp.CompilePipeline): the transformation applied to quantum tapes
     Returns:
         tuple: A tuple containing:
             - `execute_fn`: function to execute quantum tapes
@@ -72,12 +72,11 @@ def _construct_tf_autograph_pipeline(
     execute_fn = inner_execute_with_empty_jac
 
     if config.use_device_gradient:
-
         if config.grad_on_execution:
 
             def wrap_execute_and_compute_derivatives(internal_tapes):
                 """A partial function wrapping the execute_and_compute_derivatives method of the device."""
-                numpy_tapes, _ = qml.transforms.convert_to_numpy_parameters(internal_tapes)
+                numpy_tapes, _ = qp.transforms.convert_to_numpy_parameters(internal_tapes)
                 return device.execute_and_compute_derivatives(numpy_tapes, config)
 
             execute_fn = wrap_execute_and_compute_derivatives
@@ -87,14 +86,14 @@ def _construct_tf_autograph_pipeline(
 
             def execution_with_dummy_jac(internal_tapes):
                 """A wrapper around device.execute that returns an empty tuple for derivatives."""
-                numpy_tapes, _ = qml.transforms.convert_to_numpy_parameters(internal_tapes)
+                numpy_tapes, _ = qp.transforms.convert_to_numpy_parameters(internal_tapes)
                 return device.execute(numpy_tapes, config), tuple()
 
             execute_fn = execution_with_dummy_jac
 
             def device_compute_derivatives(internal_tapes):
                 """A partial function wrapping the compute_derivatives method of the device."""
-                numpy_tapes, _ = qml.transforms.convert_to_numpy_parameters(internal_tapes)
+                numpy_tapes, _ = qp.transforms.convert_to_numpy_parameters(internal_tapes)
                 return device.compute_derivatives(numpy_tapes, config)
 
             diff_method = device_compute_derivatives
@@ -119,9 +118,9 @@ def _construct_ml_execution_pipeline(
     class (`jpc`) required for gradient computations.
 
     Args:
-        config (qml.devices.ExecutionConfig): resolved execution configuration
-        device (qml.devices.Device): a Pennylane device
-        inner_transform_program (qml.CompilePipeline): the transformation applied to quantum tapes
+        config (qp.devices.ExecutionConfig): resolved execution configuration
+        device (qp.devices.Device): a Pennylane device
+        inner_transform_program (qp.CompilePipeline): the transformation applied to quantum tapes
 
     Returns:
         tuple: A tuple containing:
@@ -132,7 +131,6 @@ def _construct_ml_execution_pipeline(
         ValueError: If gradients are computed on execution (`grad_on_execution=True`).
     """
     inner_execute = _make_inner_execute(device, inner_transform_program, config)
-    cache = _cache_transform in inner_transform_program
 
     execute_fn = inner_execute
 
@@ -153,12 +151,11 @@ def _construct_ml_execution_pipeline(
     if config.grad_on_execution is True:
         raise ValueError("Gradient transforms cannot be used with grad_on_execution=True")
 
-    cache_full_jacobian = (config.interface == Interface.AUTOGRAD) and not cache
     jpc = TransformJacobianProducts(
         execute_fn,
         config.gradient_method,
         config.gradient_keyword_arguments,
-        cache_full_jacobian,
+        cache_full_jacobian=config.interface == Interface.AUTOGRAD,
     )
     for i in range(1, config.derivative_order):
         differentiable = i > 1
@@ -254,7 +251,7 @@ def _make_inner_execute(device, inner_transform, execution_config=None) -> Calla
         Closure Variables:
             inner_transform(CompilePipeline): a transform to apply to a set of tapes
             expand_fn (Callable[[QuantumScript], QuantumScript]): A device preprocessing step
-            device (qml.devices.Device): a Pennylane device
+            device (qp.devices.Device): a Pennylane device
         """
 
         transformed_tapes, transform_post_processing = inner_transform(tapes)
@@ -278,9 +275,9 @@ def run(
     """Execute a batch of quantum scripts on a device with optional gradient computation.
 
     Args:
-        tapes (qml.tape.QuantumScriptBatch): batch of quantum scripts
-        device (qml.devices.Device): a Pennylane device
-        config (qml.devices.ExecutionConfig): Resolved configuration detailing
+        tapes (qp.tape.QuantumScriptBatch): batch of quantum scripts
+        device (qp.devices.Device): a Pennylane device
+        config (qp.devices.ExecutionConfig): Resolved configuration detailing
             execution and differentiation settings.
         inner_transform_program (CompilePipeline): The transformation program to apply
             to the quantum scripts before execution.
@@ -302,7 +299,6 @@ def run(
     if (
         config.interface == Interface.TF_AUTOGRAPH
     ):  # pragma: no cover (TensorFlow tests were disabled during deprecation)
-
         execute_fn, diff_method = _construct_tf_autograph_pipeline(
             config, device, inner_transform_program
         )

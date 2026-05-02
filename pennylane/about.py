@@ -15,6 +15,7 @@ r"""
 This module contains the :func:`about` function to display all the details of the PennyLane installation,
 e.g., OS, version, `Numpy` and `Scipy` versions, installation method.
 """
+
 import json
 import os
 import platform
@@ -44,6 +45,13 @@ def _pkg_location():
         if mod and getattr(mod, "__file__", None):
             return os.path.abspath(os.path.dirname(mod.__file__))
         return "(unknown)"
+
+
+def catalyst_version() -> str | None:
+    """Get the version of the installed Catalyst package, if available."""
+    if find_spec("catalyst"):
+        return version("pennylane_catalyst")
+    return None
 
 
 def about():
@@ -104,6 +112,10 @@ def about():
     print(f"Scipy version:           {scipy.__version__}")
     print(f"JAX version:             {jax_version}")
 
+    # Compiler information
+    print(f"Catalyst version:        {catalyst_version()}")
+
+    # Plugin devices
     print("Installed devices:")
 
     for d in plugin_devices:

@@ -63,8 +63,8 @@ def binary_mapping(
 
     **Example**
 
-    >>> w = qml.BoseWord({(0, 0): "+"})
-    >>> qml.binary_mapping(w, n_states=4)
+    >>> w = qp.BoseWord({(0, 0): "+"})
+    >>> qp.binary_mapping(w, n_states=4)
     (
         0.6830127018922193 * X(0)
       + -0.1830127018922193 * (X(0) @ Z(1))
@@ -103,7 +103,7 @@ def _(bose_operator: BoseWord, n_states, tol=None):
         raise ValueError(
             f"Number of allowed bosonic states cannot be less than 2, provided {n_states}."
         )
-    nqub_per_boson = int(np.ceil(np.log2(n_states)))
+    nqub_per_boson = math.ceil_log2(n_states)
 
     creation = np.zeros((n_states, n_states))
     for s in range(n_states - 1):
@@ -188,8 +188,8 @@ def unary_mapping(
 
     **Example**
 
-    >>> w = qml.BoseWord({(0, 0): "+"})
-    >>> qml.unary_mapping(w, n_states=4)
+    >>> w = qp.BoseWord({(0, 0): "+"})
+    >>> qp.unary_mapping(w, n_states=4)
     (
         0.25 * (X(0) @ X(1))
       + -0.25j * (X(0) @ Y(1))
@@ -339,8 +339,8 @@ def christiansen_mapping(
 
     **Example**
 
-    >>> w = qml.bose.BoseWord({(0,0):"+", (1,1): "-"})
-    >>> qml.christiansen_mapping(w)
+    >>> w = qp.bose.BoseWord({(0,0):"+", (1,1): "-"})
+    >>> qp.christiansen_mapping(w)
     (
         0.25 * (X(0) @ X(1))
       + 0.25j * (X(0) @ Y(1))

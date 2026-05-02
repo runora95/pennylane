@@ -15,9 +15,11 @@
 This module contains the functions needed for resource estimation with the double factorization
 method.
 """
+
 # pylint: disable=no-self-use, too-many-arguments, too-many-instance-attributes, too-many-positional-arguments
 import numpy as np
 
+from pennylane.math import ceil_log2
 from pennylane.operation import Operation
 from pennylane.qchem import factorize
 
@@ -50,9 +52,9 @@ class DoubleFactorization(Operation):
     >>> geometry = np.array([[0.00000000,  0.00000000,  0.28377432],
     ...                      [0.00000000,  1.45278171, -1.00662237],
     ...                      [0.00000000, -1.45278171, -1.00662237]])
-    >>> mol = qml.qchem.Molecule(symbols, geometry, basis_name='sto-3g')
-    >>> core, one, two = qml.qchem.electron_integrals(mol)()
-    >>> algo = qml.estimator.DoubleFactorization(one, two)
+    >>> mol = qp.qchem.Molecule(symbols, geometry, basis_name='sto-3g')
+    >>> core, one, two = qp.qchem.electron_integrals(mol)()
+    >>> algo = qp.estimator.DoubleFactorization(one, two)
     >>> algo.lamb # the 1-Norm of the Hamiltonian
     np.float64(53.6...)
     >>> algo.gates # estimated number of non-Clifford gates
@@ -255,7 +257,7 @@ class DoubleFactorization(Operation):
 
         >>> lamb = 72.49779513025341
         >>> error = 0.001
-        >>> qml.estimator.DoubleFactorization.estimation_cost(lamb, error)
+        >>> qp.estimator.DoubleFactorization.estimation_cost(lamb, error)
         113880
         """
         if error <= 0.0:
@@ -300,7 +302,7 @@ class DoubleFactorization(Operation):
         **Example**
 
         >>> constants = (151.0, 7.0, 151.0, 30.0, -1.0)
-        >>> qml.estimator.DoubleFactorization._qrom_cost(constants)
+        >>> qp.estimator.DoubleFactorization._qrom_cost(constants)
         (168, 4)
         """
         a, b, c, d, e = constants
@@ -340,7 +342,7 @@ class DoubleFactorization(Operation):
         ...           'alpha': 10,
         ...           'beta': 20,
         ...         }
-        >>> qml.estimator.DoubleFactorization.unitary_cost(**kwargs)
+        >>> qp.estimator.DoubleFactorization.unitary_cost(**kwargs)
         2007
         """
         if n <= 0 or not isinstance(n, (int, np.integer)) or n % 2 != 0:
@@ -372,9 +374,9 @@ class DoubleFactorization(Operation):
         eta = np.array([np.log2(n) for n in range(1, rank_r + 1) if rank_r % n == 0])
         eta = int(np.max([n for n in eta if n % 1 == 0]))
 
-        nxi = np.ceil(np.log2(rank_max))  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
-        nl = np.ceil(np.log2(rank_r + 1))  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
-        nlxi = np.ceil(np.log2(rank_rm + n / 2))  # Eq. (C15) of PRX Quantum 2, 030305 (2021)
+        nxi = ceil_log2(rank_max)  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
+        nl = ceil_log2(rank_r + 1)  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
+        nlxi = ceil_log2(rank_rm + n / 2)  # Eq. (C15) of PRX Quantum 2, 030305 (2021)
 
         bp1 = nl + alpha  # Eq. (C27) of PRX Quantum 2, 030305 (2021)
         bo = nxi + nlxi + br + 1  # Eq. (C29) of PRX Quantum 2, 030305 (2021)
@@ -427,7 +429,7 @@ class DoubleFactorization(Operation):
         ...           'alpha': 10,
         ...           'beta': 20,
         ...         }
-        >>> qml.estimator.DoubleFactorization.gate_cost(**kwargs)
+        >>> qp.estimator.DoubleFactorization.gate_cost(**kwargs)
         167048631
         """
         if n <= 0 or not isinstance(n, (int, np.integer)) or n % 2 != 0:
@@ -497,7 +499,7 @@ class DoubleFactorization(Operation):
         ...           'alpha': 10,
         ...           'beta': 20,
         ...         }
-        >>> qml.estimator.DoubleFactorization.qubit_cost(**kwargs)
+        >>> qp.estimator.DoubleFactorization.qubit_cost(**kwargs)
         292
         """
         if n <= 0 or not isinstance(n, (int, np.integer)) or n % 2 != 0:
@@ -531,9 +533,9 @@ class DoubleFactorization(Operation):
 
         rank_rm = rank_r * rank_m
 
-        nxi = np.ceil(np.log2(rank_max))  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
-        nl = np.ceil(np.log2(rank_r + 1))  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
-        nlxi = np.ceil(np.log2(rank_rm + n / 2))  # Eq. (C15) of PRX Quantum 2, 030305 (2021)
+        nxi = ceil_log2(rank_max)  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
+        nl = ceil_log2(rank_r + 1)  # Eq. (C14) of PRX Quantum 2, 030305 (2021)
+        nlxi = ceil_log2(rank_rm + n / 2)  # Eq. (C15) of PRX Quantum 2, 030305 (2021)
 
         bo = nxi + nlxi + br + 1  # Eq. (C29) of PRX Quantum 2, 030305 (2021)
         bp2 = nxi + alpha + 2  # Eq. (C31) of PRX Quantum 2, 030305 (2021)
@@ -543,7 +545,7 @@ class DoubleFactorization(Operation):
         # the cost is computed using Eq. (C40) of PRX Quantum 2, 030305 (2021)
         e_cost = DoubleFactorization.estimation_cost(lamb, error)
         cost = n + 2 * nl + nxi + 3 * alpha + beta + bo + bp2
-        cost += kr * n * beta / 2 + 2 * np.ceil(np.log2(e_cost + 1)) + 7
+        cost += kr * n * beta / 2 + 2 * ceil_log2(e_cost + 1) + 7
 
         return int(cost)
 
@@ -595,11 +597,11 @@ class DoubleFactorization(Operation):
         >>> geometry = np.array([[0.00000000,  0.00000000,  0.28377432],
         ...                      [0.00000000,  1.45278171, -1.00662237],
         ...                      [0.00000000, -1.45278171, -1.00662237]])
-        >>> mol = qml.qchem.Molecule(symbols, geometry, basis_name='sto-3g')
-        >>> core, one, two = qml.qchem.electron_integrals(mol)()
+        >>> mol = qp.qchem.Molecule(symbols, geometry, basis_name='sto-3g')
+        >>> core, one, two = qp.qchem.electron_integrals(mol)()
         >>> two = np.swapaxes(two, 1, 3) # convert to the chemists notation
-        >>> _, eigvals, _ = qml.qchem.factorize(two, 1e-5)
-        >>> print(qml.estimator.DoubleFactorization.norm(one, two, eigvals))
+        >>> _, eigvals, _ = qp.qchem.factorize(two, 1e-5)
+        >>> print(qp.estimator.DoubleFactorization.norm(one, two, eigvals))
         369.4...
         """
         t_matrix = one - 0.5 * np.einsum("illj", two) + np.einsum("llij", two)

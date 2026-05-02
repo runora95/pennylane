@@ -15,9 +15,12 @@
 This submodule contains the qutrit quantum operations
 that do not depend on any parameters.
 """
+
 # pylint:disable=arguments-differ
 import numpy as np
 
+from pennylane.decomposition import add_decomps
+from pennylane.decomposition.symbolic_decomposition import self_adjoint
 from pennylane.exceptions import AdjointUndefinedError
 from pennylane.operation import Operation
 from pennylane.wires import Wires
@@ -70,7 +73,7 @@ class TShift(Operation):
 
         **Example**
 
-        >>> print(qml.TShift.compute_matrix())
+        >>> print(qp.TShift.compute_matrix())
         [[0 0 1]
          [1 0 0]
          [0 1 0]]
@@ -97,7 +100,7 @@ class TShift(Operation):
 
         **Example**
 
-        >>> print(qml.TShift.compute_eigvals())
+        >>> print(qp.TShift.compute_eigvals())
         [-0.5+0.8660254j -0.5-0.8660254j  1. +0.j       ]
         """
         return np.array([OMEGA, OMEGA**2, 1])
@@ -152,7 +155,7 @@ class TClock(Operation):
 
         **Example**
 
-        >>> print(qml.TClock.compute_matrix())
+        >>> print(qp.TClock.compute_matrix())
         [[ 1. +0.j         0. +0.j         0. +0.j       ]
          [ 0. +0.j        -0.5+0.8660254j  0. +0.j       ]
          [ 0. +0.j         0. +0.j        -0.5-0.8660254j]]
@@ -178,7 +181,7 @@ class TClock(Operation):
 
         **Example**
 
-        >>> print(qml.TClock.compute_eigvals())
+        >>> print(qp.TClock.compute_eigvals())
         [ 1. +0.j        -0.5+0.8660254j -0.5-0.8660254j]
         """
         return np.array([1, OMEGA, OMEGA**2])
@@ -242,7 +245,7 @@ class TAdd(Operation):
 
         **Example**
 
-        >>> print(qml.TAdd.compute_matrix())
+        >>> print(qp.TAdd.compute_matrix())
         [[1 0 0 0 0 0 0 0 0]
          [0 1 0 0 0 0 0 0 0]
          [0 0 1 0 0 0 0 0 0]
@@ -286,7 +289,7 @@ class TAdd(Operation):
 
         **Example**
 
-        >>> print(qml.TAdd.compute_eigvals())
+        >>> print(qp.TAdd.compute_eigvals())
         [-0.5+0.8660254j -0.5-0.8660254j  1. +0.j        -0.5+0.8660254j -0.5-0.8660254j  1. +0.j         1. +0.j         1. +0.j         1. +0.j       ]
         """
         return np.array([OMEGA, OMEGA**2, 1, OMEGA, OMEGA**2, 1, 1, 1, 1])
@@ -350,7 +353,7 @@ class TSWAP(Operation):
 
         **Example**
 
-        >>> print(qml.TSWAP.compute_matrix())
+        >>> print(qp.TSWAP.compute_matrix())
         [[1 0 0 0 0 0 0 0 0]
          [0 0 0 1 0 0 0 0 0]
          [0 0 0 0 0 0 1 0 0]
@@ -394,7 +397,7 @@ class TSWAP(Operation):
 
         **Example**
 
-        >>> print(qml.TSWAP.compute_eigvals())
+        >>> print(qp.TSWAP.compute_eigvals())
         [ 1. -1.  1. -1.  1. -1.  1.  1.  1.]
         """
         return np.array([1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0])
@@ -406,6 +409,9 @@ class TSWAP(Operation):
 
     def adjoint(self):
         return TSWAP(wires=self.wires)
+
+
+add_decomps("Adjoint(TSWAP)", self_adjoint)
 
 
 class THadamard(Operation):
@@ -445,22 +451,22 @@ class THadamard(Operation):
     The specified subspace will determine which basis states the operation actually
     applies to:
 
-    >>> qml.THadamard(wires=0, subspace=(0, 1)).matrix()
+    >>> qp.THadamard(wires=0, subspace=(0, 1)).matrix()
     array([[ 0.70710678+0.j,  0.70710678+0.j,  0.        +0.j],
            [ 0.70710678+0.j, -0.70710678+0.j,  0.        +0.j],
            [ 0.        +0.j,  0.        +0.j,  1.        +0.j]])
 
-    >>> qml.THadamard(wires=0, subspace=(0, 2)).matrix()
+    >>> qp.THadamard(wires=0, subspace=(0, 2)).matrix()
     array([[ 0.70710678+0.j,  0.        +0.j,  0.70710678+0.j],
            [ 0.        +0.j,  1.        +0.j,  0.        +0.j],
            [ 0.70710678+0.j,  0.        +0.j, -0.70710678+0.j]])
 
-    >>> qml.THadamard(wires=0, subspace=(1, 2)).matrix()
+    >>> qp.THadamard(wires=0, subspace=(1, 2)).matrix()
     array([[ 1.        +0.j,  0.        +0.j,  0.        +0.j],
            [ 0.        +0.j,  0.70710678+0.j,  0.70710678+0.j],
            [ 0.        +0.j,  0.70710678+0.j, -0.70710678+0.j]])
 
-    >>> qml.THadamard(wires=0, subspace=None).matrix()
+    >>> qp.THadamard(wires=0, subspace=None).matrix()
     array([[ 0. -0.57735027j,  0. -0.57735027j,  0. -0.57735027j],
            [ 0. -0.57735027j,  0.5+0.28867513j, -0.5+0.28867513j],
            [ 0. -0.57735027j, -0.5+0.28867513j,  0.5+0.28867513j]])
@@ -475,9 +481,7 @@ class THadamard(Operation):
 
     def __init__(self, wires, subspace=None):
         self._subspace = validate_subspace(subspace) if subspace is not None else None
-        self._hyperparameters = {
-            "subspace": self.subspace,
-        }
+        self._hyperparameters = {"subspace": self.subspace}
 
         super().__init__(wires=wires)
 
@@ -513,7 +517,7 @@ class THadamard(Operation):
 
         **Example**
 
-        >>> print(qml.THadamard.compute_matrix(subspace=(0, 2)))
+        >>> print(qp.THadamard.compute_matrix(subspace=(0, 2)))
         [[ 0.70710678+0.j  0.        +0.j  0.70710678+0.j]
          [ 0.        +0.j  1.        +0.j  0.        +0.j]
          [ 0.70710678+0.j  0.        +0.j -0.70710678+0.j]]

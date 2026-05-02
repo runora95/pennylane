@@ -14,6 +14,7 @@
 
 """This module contains functions for preprocessing `QuantumTape` objects to ensure
 that they are supported for execution by a device."""
+
 # pylint: disable=protected-access, too-many-arguments
 
 import os
@@ -31,7 +32,6 @@ from pennylane.exceptions import (
 )
 from pennylane.math import is_abstract, requires_grad
 from pennylane.measurements import (
-    MeasurementProcess,
     SampleMeasurement,
     StateMeasurement,
     counts,
@@ -76,7 +76,7 @@ def no_sampling(
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]:
 
-        The unaltered input circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The unaltered input circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
 
     This transform can be added to forbid finite shots. For example, ``default.qubit`` uses it for
@@ -97,7 +97,7 @@ def no_analytic(
         name (str): name to use in error message.
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]:
-        The unaltered input circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The unaltered input circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
 
     This transform can be added to forbid analytic results. This is relevant for devices
@@ -125,7 +125,7 @@ def validate_device_wires(
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]:
 
-        The unaltered input circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The unaltered input circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
     Raises:
         WireError: if the tape has a wire not present in the provided wires, or if abstract wires are present.
@@ -200,7 +200,7 @@ def validate_multiprocessing_workers(
     Returns:
         qnode (pennylane.QNode) or quantum function (callable) or tuple[List[.QuantumTape], function]:
 
-        The unaltered input circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The unaltered input circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
     """
     if max_workers is not None:
@@ -232,11 +232,9 @@ def validate_multiprocessing_workers(
             raise DeviceError("Debugging with ``Snapshots`` is not available with multiprocessing.")
 
         if any(isinstance(op, Snapshot) for op in tape.operations):
-            raise RuntimeError(
-                """ProcessPoolExecutor cannot execute a QuantumScript with
+            raise RuntimeError("""ProcessPoolExecutor cannot execute a QuantumScript with
                 a ``Snapshot`` operation. Change the value of ``max_workers``
-                to ``None`` or execute the QuantumScript separately."""
-            )
+                to ``None`` or execute the QuantumScript separately.""")
 
     return (tape,), null_postprocessing
 
@@ -276,9 +274,13 @@ def decompose(  # pylint: disable = too-many-positional-arguments
     skip_initial_state_prep: bool = True,
     decomposer: Callable[[Operator], Sequence[Operator]] | None = None,
     device_wires: Wires | None = None,
-    target_gates: set | None = None,
+    num_work_wires: int | None = None,
+    target_gates: set | dict | None = None,
+    fixed_decomps: dict | None = None,
+    alt_decomps: dict | None = None,
     name: str = "device",
     error: type[Exception] | None = None,
+    strict: bool = True,
 ) -> tuple[QuantumScriptBatch, PostprocessingFn]:
     """Decompose operations until the stopping condition is met.
 
@@ -298,21 +300,34 @@ def decompose(  # pylint: disable = too-many-positional-arguments
         decomposer (Callable): an optional callable that takes an operator and implements the
             relevant decomposition. If ``None``, defaults to using a callable returning
             ``op.decomposition()`` for any :class:`~.Operator` .
-        device_wires (Wires): The device wires. If provided along with ``target_gates``, will be
-            used to automatically set up graph decomposition when enabled.
-        target_gates (set): The target gate set for graph decomposition. If provided along with
-            ``device_wires``, will automatically enable graph-based decomposition when available.
+        device_wires (Wires): The device wires. If provided along with ``target_gates`` and
+            graph-based decomposition is enabled, will be used to infer available work wires.
+        num_work_wires (int): Number of work wires to be used if the graph-based decomposition
+            is enabled. If ``device_wires`` are given, they take precedence over ``num_work_wires``
+        target_gates (set or dict): Target gate set to be used if the graph-based decomposition
+            is enabled. See :func:`qp.decompose <pennylane.transforms.decompose>` for more details.
+        fixed_decomps (dict): Fixed decomposition rules to be used if the graph-based decomposition
+            is enabled. See :func:`qp.decompose <pennylane.transforms.decompose>` for more details.
+        alt_decomps (dict): Alternative decomposition rules to be used if the graph-based
+            decomposition is enabled. See :func:`qp.decompose <pennylane.transforms.decompose>`
+            for more details.
         name (str): The name of the transform, process or device using decompose. Used in the
             error message. Defaults to "device".
         error (type): An error type to raise if it is not possible to obtain a decomposition that
             fulfills the ``stopping_condition``. Defaults to ``DeviceError``.
+        strict (bool): If ``False``, operators that do not define a decomposition will be treated
+            as supported. Defaults to ``True``
 
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumScript], function]:
 
-        The decomposed circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The decomposed circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
-    .. seealso:: This transform is intended for device developers. See :func:`qml.transforms.decompose <pennylane.transforms.decompose>` for a more user-friendly interface.
+    .. seealso::
+
+        This transform is intended for device developers. See
+        :func:`qp.decompose <pennylane.transforms.decompose>` for a more user-friendly
+        interface.
 
     Raises:
         Exception: Type defaults to ``DeviceError`` but can be modified via keyword argument.
@@ -321,9 +336,10 @@ def decompose(  # pylint: disable = too-many-positional-arguments
 
     **Example:**
 
+    >>> import pennylane as qp
     >>> def stopping_condition(obj):
     ...     return obj.name in {"CNOT", "RX", "RZ"}
-    >>> tape = qml.tape.QuantumScript([qml.IsingXX(1.2, wires=(0,1))], [qml.expval(qml.Z(0))])
+    >>> tape = qp.tape.QuantumScript([qp.IsingXX(1.2, wires=(0,1))], [qp.expval(qp.Z(0))])
     >>> batch, fn = decompose(tape, stopping_condition)
     >>> batch[0].circuit
     [CNOT(wires=[0, 1]),
@@ -334,26 +350,20 @@ def decompose(  # pylint: disable = too-many-positional-arguments
     If an operator cannot be decomposed into a supported operation, an error is raised:
 
     >>> decompose(tape, lambda obj: obj.name == "S")
-    DeviceError: Operator CNOT(wires=[0, 1]) not supported on device and does not provide a decomposition.
+    Traceback (most recent call last):
+    ...
+    pennylane.exceptions.DeviceError: Operator CNOT(wires=[0, 1]) not supported with device and does not provide a decomposition.
 
     The ``skip_initial_state_prep`` specifies whether the device supports state prep operations
     at the beginning of the circuit.
 
-    >>> tape = qml.tape.QuantumScript([qml.BasisState([1], wires=0), qml.BasisState([1], wires=1)])
+    >>> tape = qp.tape.QuantumScript([qp.BasisState([1], wires=0), qp.BasisState([1], wires=1)])
     >>> batch, fn = decompose(tape, stopping_condition)
     >>> batch[0].circuit
-    [BasisState(array([1]), wires=[0]),
-    RZ(1.5707963267948966, wires=[1]),
-    RX(3.141592653589793, wires=[1]),
-    RZ(1.5707963267948966, wires=[1])]
+    [BasisState(array([1]), wires=[0]), RX(3.141592653589793, wires=[1])]
     >>> batch, fn = decompose(tape, stopping_condition, skip_initial_state_prep=False)
     >>> batch[0].circuit
-    [RZ(1.5707963267948966, wires=[0]),
-    RX(3.141592653589793, wires=[0]),
-    RZ(1.5707963267948966, wires=[0]),
-    RZ(1.5707963267948966, wires=[1]),
-    RX(3.141592653589793, wires=[1]),
-    RZ(1.5707963267948966, wires=[1])]
+    [RX(3.141592653589793, wires=[0]), RX(3.141592653589793, wires=[1])]
 
     """
 
@@ -362,17 +372,19 @@ def decompose(  # pylint: disable = too-many-positional-arguments
     if stopping_condition_shots is not None and tape.shots:
         stopping_condition = stopping_condition_shots
 
-    # Compute parameters for graph decomposition if device_wires and target_gates are provided
-    if device_wires is None:
-        num_available_work_wires = device_wires  # no constraint on work wires
-    else:
+    num_available_work_wires = None  # no constraint on work wires / not applicable with old system
+    graph_solution = None
+    if device_wires is not None:
         # Calculate work wires as device wires that are not used by the tape
         num_available_work_wires = len(set(device_wires) - set(tape.wires))
 
-    graph_solution = None
     if target_gates is not None and enabled_graph():
-        # Filter out MeasurementProcess instances that shouldn't be decomposed
-        decomposable_ops = [op for op in tape.operations if not isinstance(op, MeasurementProcess)]
+        # Compute parameters for graph decomposition if device_wires and target_gates are provided
+        if num_available_work_wires is None:
+            num_available_work_wires = num_work_wires
+
+        # Filter out instances of ops that don't need to be decomposed
+        decomposable_ops = [op for op in tape.operations if not stopping_condition(op)]
 
         # Construct and solve the decomposition graph
         graph_solution = _construct_and_solve_decomp_graph(
@@ -380,8 +392,9 @@ def decompose(  # pylint: disable = too-many-positional-arguments
             target_gates=target_gates,
             num_work_wires=num_available_work_wires,
             minimize_work_wires=False,
-            fixed_decomps=None,
-            alt_decomps=None,
+            fixed_decomps=fixed_decomps,
+            alt_decomps=alt_decomps,
+            strict=strict,
         )
 
     if tape.operations and isinstance(tape[0], StatePrepBase) and skip_initial_state_prep:
@@ -440,7 +453,7 @@ def validate_observables(
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[.QuantumTape], function]:
 
-        The unaltered input circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The unaltered input circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
     Raises:
         ~pennylane.DeviceError: if an observable is not supported
@@ -449,9 +462,11 @@ def validate_observables(
 
     >>> def accepted_observable(obj):
     ...    return obj.name in {"PauliX", "PauliY", "PauliZ"}
-    >>> tape = qml.tape.QuantumScript([], [qml.expval(qml.Z(0) + qml.Y(0))])
+    >>> tape = qp.tape.QuantumScript([], [qp.expval(qp.Z(0) + qp.Y(0))])
     >>> validate_observables(tape, accepted_observable)
-    DeviceError: Observable Z(0) + Y(0) not supported on device
+    Traceback (most recent call last):
+    ...
+    pennylane.exceptions.DeviceError: Observable Z(0) + Y(0) not supported on device
 
     """
     if bool(tape.shots) and stopping_condition_shots is not None:
@@ -481,21 +496,25 @@ def validate_measurements(
     Returns:
         qnode (pennylane.QNode) or quantum function (callable) or tuple[List[.QuantumTape], function]:
 
-        The unaltered input circuit. The output type is explained in :func:`qml.transform <pennylane.transform>`.
+        The unaltered input circuit. The output type is explained in :func:`qp.transform <pennylane.transform>`.
 
     Raises:
         ~pennylane.DeviceError: if a measurement process is not supported.
 
     >>> def analytic_measurements(m):
-    ...     return isinstance(m, qml.measurements.StateMP)
+    ...     return isinstance(m, qp.measurements.StateMP)
     >>> def shots_measurements(m):
-    ...     return isinstance(m, qml.measurements.CountsMP)
-    >>> tape = qml.tape.QuantumScript([], [qml.expval(qml.Z(0))])
+    ...     return isinstance(m, qp.measurements.CountsMP)
+    >>> tape = qp.tape.QuantumScript([], [qp.expval(qp.Z(0))])
     >>> validate_measurements(tape, analytic_measurements, shots_measurements)
-    DeviceError: Measurement expval(Z(0)) not accepted for analytic simulation on device.
-    >>> tape = qml.tape.QuantumScript([], [qml.sample()], shots=10)
+    Traceback (most recent call last):
+    ...
+    pennylane.exceptions.DeviceError: Measurement expval(Z(0)) not accepted for analytic simulation on device.
+    >>> tape = qp.tape.QuantumScript([], [qp.sample()], shots=10)
     >>> validate_measurements(tape, analytic_measurements, shots_measurements)
-    DeviceError: Measurement sample(wires=[]) not accepted with finite shots on device
+    Traceback (most recent call last):
+    ...
+    pennylane.exceptions.DeviceError: Measurement sample(wires=[]) not accepted with finite shots on device
 
     """
     if analytic_measurements is None:
@@ -565,19 +584,19 @@ def measurements_from_samples(tape):
 
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The
-        transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
+        transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
 
     **Example**
 
     Consider the tape:
 
-    >>> ops = [qml.X(0), qml.RY(1.23, 1)]
-    >>> measurements = [qml.expval(qml.Y(0)), qml.probs(wires=[1])]
-    >>> tape = qml.tape.QuantumScript(ops, measurements, shots=10)
+    >>> ops = [qp.X(0), qp.RY(1.23, 1)]
+    >>> measurements = [qp.expval(qp.Y(0)), qp.probs(wires=[1])]
+    >>> tape = qp.tape.QuantumScript(ops, measurements, shots=10)
 
     We can apply the transform to diagonalize and convert the two measurements to a single `sample` measurement:
 
-    >>> (new_tape, ), fn = qml.devices.preprocess.measurements_from_samples(tape)
+    >>> (new_tape, ), fn = qp.devices.preprocess.measurements_from_samples(tape)
     >>> new_tape.measurements
     [sample(wires=[0, 1])]
 
@@ -588,22 +607,21 @@ def measurements_from_samples(tape):
 
     Executing the tape returns samples that can be post-processed to get the originally requested measurements:
 
-    >>> dev = qml.device("default.qubit")
+    >>> dev = qp.device("default.qubit", seed=42)
     >>> res = dev.execute(new_tape)
     >>> res
     array([[1, 0],
-           [0, 0],
            [0, 1],
            [1, 1],
-           [0, 1],
            [1, 0],
-           [0, 1],
+           [0, 0],
+           [1, 1],
            [1, 0],
            [1, 0],
-           [1, 0]])
-
+           [0, 0],
+           [0, 1]])
     >>> fn((res,))
-    [-0.2, array([0.6, 0.4])]
+    [np.float64(-0.2), array([0.6, 0.4])]
     """
     if not tape.shots:
         return (tape,), null_postprocessing
@@ -661,19 +679,19 @@ def measurements_from_counts(tape):
 
     Returns:
         qnode (QNode) or quantum function (Callable) or tuple[List[QuantumTape], function]: The
-        transformed circuit as described in :func:`qml.transform <pennylane.transform>`.
+        transformed circuit as described in :func:`qp.transform <pennylane.transform>`.
 
     **Example**
 
     Consider the tape:
 
-    >>> ops = [qml.X(0), qml.RY(1.23, 1)]
-    >>> measurements = [qml.expval(qml.Y(0)), qml.probs(wires=[1])]
-    >>> tape = qml.tape.QuantumScript(ops, measurements, shots=10)
+    >>> ops = [qp.X(0), qp.RY(1.23, 1)]
+    >>> measurements = [qp.expval(qp.Y(0)), qp.probs(wires=[1])]
+    >>> tape = qp.tape.QuantumScript(ops, measurements, shots=10)
 
     We can apply the transform to diagonalize and convert the two measurements to a single `counts` measurement:
 
-    >>> (new_tape, ), fn = qml.devices.preprocess.measurements_from_counts(tape)
+    >>> (new_tape, ), fn = qp.devices.preprocess.measurements_from_counts(tape)
     >>> new_tape.measurements
     [CountsMP(wires=[0, 1], all_outcomes=False)]
 
@@ -685,15 +703,15 @@ def measurements_from_counts(tape):
     The tape is now compatible with a device backend that only supports counts. Executing the
     tape returns the raw counts:
 
-    >>> dev = qml.device("default.qubit")
+    >>> dev = qp.device("default.qubit", seed=42)
     >>> res = dev.execute(new_tape)
     >>> res
-    {'00': 4, '01': 2, '10': 2, '11': 2}
+    {np.str_('00'): np.int64(2), np.str_('01'): np.int64(2), np.str_('10'): np.int64(4), np.str_('11'): np.int64(2)}
 
     And these can be post-processed to get the originally requested measurements:
 
     >>> fn((res,))
-    [-0.19999999999999996, array([0.7, 0.3])]
+    [np.float64(-0.19999999999999996), array([0.6, 0.4])]
     """
     if tape.shots.total_shots is None:
         return (tape,), null_postprocessing
@@ -759,25 +777,26 @@ def device_resolve_dynamic_wires(
     If device wires are provided, possible values for dynamic wires are determined from
     device wires not present in the tape.
 
+    >>> import pennylane as qp
     >>> from pennylane.devices.preprocess import device_resolve_dynamic_wires
     >>> def f():
-    ...     qml.H(0)
-    ...     with qml.allocation.allocate(1) as wires:
-    ...         qml.X(wires)
-    ...     with qml.allocation.allocate(1) as wires:
-    ...         qml.X(wires)
+    ...     qp.H(0)
+    ...     with qp.allocation.allocate(1) as wires:
+    ...         qp.X(wires)
+    ...     with qp.allocation.allocate(1) as wires:
+    ...         qp.X(wires)
 
-    >>> transformed = device_resolve_dynamic_wires(f, wires=qml.wires.Wires((0, "a", "b")))
-    >>> print(qml.draw(transformed)())
+    >>> transformed = device_resolve_dynamic_wires(f, wires=(0, "a", "b"))
+    >>> print(qp.draw(transformed)())
     0: ──H─┤
-    b: ──X─┤
     a: ──X─┤
+    b: ──X─┤
 
     If the device has no wires, then wires are allocated starting at the smallest
     integer that is larger than all integer wires present in the ``tape``.
 
     >>> transformed_None = device_resolve_dynamic_wires(f, wires=None)
-    >>> print(qml.draw(transformed_None)())
+    >>> print(qp.draw(transformed_None)())
     0: ──H──────────────┤
     1: ──X──┤↗│  │0⟩──X─┤
 
@@ -785,7 +804,7 @@ def device_resolve_dynamic_wires(
 
     """
     if wires:
-        zeroed = reversed(list(set(wires) - set(tape.wires)))
+        zeroed = reversed([w for w in wires if w not in tape.wires])
         min_int = None
     else:
         zeroed = ()

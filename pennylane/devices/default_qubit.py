@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from pennylane import capture, math, ops
+from pennylane.decomposition.gate_set import GateSet
 from pennylane.exceptions import DeviceError
 from pennylane.logging import debug_logger, debug_logger_init
 from pennylane.measurements import (
@@ -122,12 +123,16 @@ _BASE_DQ_GATE_SET = {
 
 
 # Complete gate set including controlled and adjoint variants
-ALL_DQ_GATE_SET = (
+ALL_DQ_GATES = GateSet(
     _BASE_DQ_GATE_SET
     | {f"C({gate})" for gate in _BASE_DQ_GATE_SET}
     | {f"Adjoint({gate})" for gate in _BASE_DQ_GATE_SET}
+    | {"Projector"},
+    name="All DefaultQubit Gates",
 )
 
+ALL_DQ_GATES_PLUS_MCM = ALL_DQ_GATES | GateSet({"MidMeasureMP"})
+ALL_DQ_GATES_PLUS_MCM.name = "All DefaultQubit Gates With MCM"
 
 _special_operator_support = {
     "QFT": lambda op: len(op.wires) < 6,
@@ -240,7 +245,7 @@ def _conditional_broadcast_expand(tape):
 def no_counts(tape):
     """Throws an error on counts measurements."""
     if any(isinstance(mp, CountsMP) for mp in tape.measurements):
-        raise NotImplementedError("The JAX-JIT interface doesn't support qml.counts.")
+        raise NotImplementedError("The JAX-JIT interface doesn't support qp.counts.")
     return (tape,), null_postprocessing
 
 
@@ -308,7 +313,7 @@ def _supports_adjoint(circuit, device_wires, device_name):
 
     program = CompilePipeline()
     program.add_transform(validate_device_wires, device_wires, name=device_name)
-    _add_adjoint_transforms(program, device_wires=device_wires)
+    _add_adjoint_transforms(program, device_wires=device_wires, target_gates=ALL_DQ_GATES_PLUS_MCM)
 
     try:
         program((circuit,))
@@ -321,7 +326,12 @@ def _supports_adjoint(circuit, device_wires, device_name):
     return True
 
 
-def _add_adjoint_transforms(program: CompilePipeline, device_vjp=False, device_wires=None) -> None:
+def _add_adjoint_transforms(
+    program: CompilePipeline,
+    device_vjp=False,
+    device_wires=None,
+    target_gates=ALL_DQ_GATES,
+) -> None:
     """Private helper function for ``preprocess`` that adds the transforms specific
     for adjoint differentiation.
 
@@ -329,6 +339,7 @@ def _add_adjoint_transforms(program: CompilePipeline, device_vjp=False, device_w
         program (CompilePipeline): where we will add the adjoint differentiation transforms
         device_vjp (bool): whether or not to use the device-provided Vector Jacobian Product (VJP).
         device_wires (Wires): the device wires, used to calculate available work wires
+        target_gates (GateSet): the set of gates to target in the decomposition
 
     Side Effects:
         Adds transforms to the input program.
@@ -341,15 +352,12 @@ def _add_adjoint_transforms(program: CompilePipeline, device_vjp=False, device_w
         decompose,
         stopping_condition=adjoint_ops,
         device_wires=device_wires,
-        target_gates=ALL_DQ_GATE_SET,
+        target_gates=target_gates,
         name=name,
         skip_initial_state_prep=False,
     )
     program.add_transform(validate_observables, adjoint_observables, name=name)
-    program.add_transform(
-        validate_measurements,
-        name=name,
-    )
+    program.add_transform(validate_measurements, name=name)
     program.add_transform(adjoint_state_measurements, device_vjp=device_vjp)
     program.add_transform(broadcast_expand)
     program.add_transform(validate_adjoint_trainable_params)
@@ -383,18 +391,20 @@ class DefaultQubit(Device):
 
     .. code-block:: python
 
+        import pennylane as qp
+
         n_layers = 5
         n_wires = 10
         num_qscripts = 5
 
-        shape = qml.StronglyEntanglingLayers.shape(n_layers=n_layers, n_wires=n_wires)
-        rng = qml.numpy.random.default_rng(seed=42)
+        shape = qp.StronglyEntanglingLayers.shape(n_layers=n_layers, n_wires=n_wires)
+        rng = qp.numpy.random.default_rng(seed=42)
 
         qscripts = []
         for i in range(num_qscripts):
             params = rng.random(shape)
-            op = qml.StronglyEntanglingLayers(params, wires=range(n_wires))
-            qs = qml.tape.QuantumScript([op], [qml.expval(qml.Z(0))])
+            op = qp.StronglyEntanglingLayers(params, wires=range(n_wires))
+            qs = qp.tape.QuantumScript([op], [qp.expval(qp.Z(0))])
             qscripts.append(qs)
 
     >>> dev = DefaultQubit()
@@ -402,11 +412,11 @@ class DefaultQubit(Device):
     >>> new_batch, post_processing_fn = program(qscripts)
     >>> results = dev.execute(new_batch, execution_config=execution_config)
     >>> post_processing_fn(results)
-    [-0.0006888975950537501,
-    0.025576307134457577,
-    -0.0038567269892757494,
-    0.1339705146860149,
-    -0.03780669772690448]
+    (tensor(-0.0006889, requires_grad=True),
+    tensor(0.02557631, requires_grad=True),
+    tensor(-0.00385673, requires_grad=True),
+    tensor(0.13397051, requires_grad=True),
+    tensor(-0.0378067, requires_grad=True))
 
     This device currently supports backpropagation derivatives:
 
@@ -422,16 +432,16 @@ class DefaultQubit(Device):
 
         @jax.jit
         def f(x):
-            qs = qml.tape.QuantumScript([qml.RX(x, 0)], [qml.expval(qml.Z(0))])
+            qs = qp.tape.QuantumScript([qp.RX(x, 0)], [qp.expval(qp.Z(0))])
             program, execution_config = dev.preprocess()
             new_batch, post_processing_fn = program([qs])
             results = dev.execute(new_batch, execution_config=execution_config)
-            return post_processing_fn(results)
+            return post_processing_fn(results)[0]
 
     >>> f(jax.numpy.array(1.2))
-    DeviceArray(0.36235774, dtype=float32)
+    Array(0.362..., dtype=float64)
     >>> jax.grad(f)(jax.numpy.array(1.2))
-    DeviceArray(-0.93203914, dtype=float32, weak_type=True)
+    Array(-0.932..., dtype=float64, weak_type=True)
 
     .. details::
         :title: Tracking
@@ -466,6 +476,11 @@ class DefaultQubit(Device):
         >>> new_batch, post_processing_fn = program(qscripts)
         >>> results = dev.execute(new_batch, execution_config=execution_config)
         >>> post_processing_fn(results)
+        (np.float64(-0.0006888975950538057),
+        np.float64(0.025576307134457466),
+        np.float64(-0.0038567269892758604),
+        np.float64(0.13397051468601484),
+        np.float64(-0.03780669772690465))
 
         If you monitor your CPU usage, you should see 5 new Python processes pop up to
         crunch through those ``QuantumScript``'s. Beware not oversubscribing your machine.
@@ -495,7 +510,7 @@ class DefaultQubit(Device):
             if multiprocessing fails on macOS in your Jupyter notebook environment, try
             restarting the session and adding the following at the beginning of the file:
 
-            .. code-block:: python
+            .. code-block:: py
 
                 import multiprocessing
                 multiprocessing.set_start_method("fork")
@@ -608,10 +623,15 @@ class DefaultQubit(Device):
 
     def _capture_preprocess_transforms(self, config: ExecutionConfig) -> CompilePipeline:
         compile_pileline = CompilePipeline()
+        target_gate_set = ALL_DQ_GATES
         if config.mcm_config.mcm_method == "deferred":
             compile_pileline.add_transform(defer_measurements, num_wires=len(self.wires))
+        else:
+            target_gate_set = ALL_DQ_GATES_PLUS_MCM
         compile_pileline.add_transform(
-            transforms_decompose, gate_set=ALL_DQ_GATE_SET, stopping_condition=stopping_condition
+            transforms_decompose,
+            gate_set=target_gate_set,
+            stopping_condition=stopping_condition,
         )
 
         return compile_pileline
@@ -636,6 +656,7 @@ class DefaultQubit(Device):
             return self._capture_preprocess_transforms(config)
 
         compile_pileline = CompilePipeline()
+        target_gate_set = ALL_DQ_GATES
 
         if config.interface == math.Interface.JAX_JIT:
             compile_pileline.add_transform(no_counts)
@@ -645,11 +666,13 @@ class DefaultQubit(Device):
             _stopping_condition = no_mcms_stopping_condition
         else:
             _stopping_condition = allow_mcms_stopping_condition
+            target_gate_set = ALL_DQ_GATES_PLUS_MCM
+
         compile_pileline.add_transform(
             decompose,
             stopping_condition=_stopping_condition,
             device_wires=self.wires,
-            target_gates=ALL_DQ_GATE_SET,
+            target_gates=target_gate_set,
             name=self.name,
         )
         _allow_resets = config.mcm_config.mcm_method != "deferred"
@@ -684,6 +707,7 @@ class DefaultQubit(Device):
                 compile_pileline,
                 device_vjp=config.use_device_jacobian_product,
                 device_wires=self.wires,
+                target_gates=target_gate_set,
             )
         return compile_pileline
 

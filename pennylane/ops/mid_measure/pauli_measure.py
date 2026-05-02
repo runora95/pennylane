@@ -16,10 +16,12 @@ Implements the pauli measurement.
 """
 
 import uuid
+import warnings
 from functools import lru_cache
 
 from pennylane import math
 from pennylane.capture import enabled as capture_enabled
+from pennylane.exceptions import PennyLaneDeprecationWarning
 from pennylane.operation import Operator
 from pennylane.wires import Wires, WiresLike
 
@@ -31,13 +33,24 @@ _VALID_PAULI_CHARS = "XYZ"
 class PauliMeasure(Operator):
     """A Pauli product measurement."""
 
+    # pylint: disable=too-many-arguments
     def __init__(
         self,
         pauli_word: str,
         wires: WiresLike,
         postselect: int | None = None,
         id: str | None = None,
+        meas_uid: str | None = None,
     ):
+        if id is not None:
+            warnings.warn(
+                "The 'id' argument has been renamed to 'meas_uid'. Access through 'id' will be removed in v0.46.",
+                PennyLaneDeprecationWarning,
+            )
+            # Only override if meas_uid wasn't explicitly provided
+            if meas_uid is None:
+                meas_uid = id
+
         if not all(c in _VALID_PAULI_CHARS for c in pauli_word):
             raise ValueError(
                 f'The given Pauli word "{pauli_word}" contains characters that '
@@ -51,9 +64,15 @@ class PauliMeasure(Operator):
                 f"word. The Pauli word {pauli_word} has length {len(pauli_word)} "
                 f"and {len(wires)} wires were given: {wires}."
             )
-        super().__init__(wires=wires, id=id)
+        super().__init__(wires=wires)
         self.hyperparameters["pauli_word"] = pauli_word
         self.hyperparameters["postselect"] = postselect
+        self.hyperparameters["meas_uid"] = meas_uid
+
+    @property
+    def meas_uid(self) -> str | None:
+        """The custom ID associated with the measurement instance."""
+        return self.hyperparameters["meas_uid"]
 
     @property
     def pauli_word(self) -> str:
@@ -82,13 +101,15 @@ class PauliMeasure(Operator):
     @property
     def hash(self) -> int:
         """int: An integer hash uniquely representing the measurement."""
-        return hash((self.__class__.__name__, self.pauli_word, tuple(self.wires.tolist()), self.id))
+        return hash(
+            (self.__class__.__name__, self.pauli_word, tuple(self.wires.tolist()), self.meas_uid)
+        )
 
 
 def _pauli_measure_impl(wires: WiresLike, pauli_word: str, postselect: int | None = None):
     """Concrete implementation of the pauli_measure primitive."""
     measurement_id = str(uuid.uuid4())
-    measurement = PauliMeasure(pauli_word, wires, postselect, measurement_id)
+    measurement = PauliMeasure(pauli_word, wires, postselect, meas_uid=measurement_id)
     return MeasurementValue([measurement])
 
 
@@ -99,9 +120,9 @@ def _create_pauli_measure_primitive():
     # pylint: disable=import-outside-toplevel
     import jax
 
-    from pennylane.capture.custom_primitives import QmlPrimitive
+    from pennylane.capture.custom_primitives import QpPrimitive
 
-    pauli_measure_p = QmlPrimitive("pauli_measure")
+    pauli_measure_p = QpPrimitive("pauli_measure")
 
     @pauli_measure_p.def_impl
     def _pauli_measure_primitive_impl(*wires, pauli_word="", postselect=None):
@@ -155,19 +176,19 @@ def pauli_measure(pauli_word: str, wires: WiresLike, postselect: int | None = No
 
     .. code-block:: python
 
-        @qml.qnode(qml.device("null.qubit", wires=3))
+        @qp.qnode(qp.device("null.qubit", wires=3))
         def circuit():
-            qml.Hadamard(0)
-            qml.Hadamard(2)
+            qp.Hadamard(0)
+            qp.Hadamard(2)
 
-            ppm = qml.pauli_measure(pauli_word="XY", wires=[0, 2])
-            qml.cond(ppm, qml.X)(wires=1)
+            ppm = qp.pauli_measure(pauli_word="XY", wires=[0, 2])
+            qp.cond(ppm, qp.X)(wires=1)
 
-            return qml.expval(qml.Z(0))
+            return qp.expval(qp.Z(0))
 
     The ``X`` operation on wire ``1`` will be applied conditionally on the value of the PPM outcome:
 
-    >>> print(qml.draw(circuit)())
+    >>> print(qp.draw(circuit)())
     0: ──H─╭┤↗X├────┤  <Z>
     1: ────│──────X─┤
     2: ──H─╰┤↗Y├──║─┤
@@ -176,16 +197,16 @@ def pauli_measure(pauli_word: str, wires: WiresLike, postselect: int | None = No
     Additionally, the number of PPM operations in a circuit can be easily inspected with :func:`~.specs`
     where they are denoted as a :class:`~.ops.mid_measure.pauli_measure.PauliMeasure` gate type:
 
-    >>> print(qml.specs(circuit)()['resources'])
-    Total wire allocations: 3
+    >>> print(qp.specs(circuit)()['resources'])
+    Wire allocations: 3
     Total gates: 4
-    Circuit depth: 3
-    Gate types:
-      Hadamard: 2
-      PauliMeasure: 1
-      Conditional(PauliX): 1
+    Gate counts:
+    - Hadamard: 2
+    - PauliMeasure: 1
+    - Conditional(PauliX): 1
     Measurements:
-      expval(PauliZ): 1
+    - expval(PauliZ): 1
+    Depth: 3
     """
 
     if capture_enabled():
