@@ -1,0 +1,22 @@
+name: Hello World
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  say_hello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Greet
+        run: |
+          echo "Hello world!"
+
+  say_hello1:
+    needs: say_hello
+    runs-on: ubuntu-latest
+    steps:
+      - name: Greet
+        run: |
+          echo "Hello world 2!"
+          echo "event name is ${{ github.event_name }}"
