@@ -24,7 +24,4 @@ jobs:
 
   trigger_other:
     needs: say_hello1
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger other workflow
-        uses: ./.github/workflows/test-act.yml
+    uses: ./.github/workflows/test-act.yml
