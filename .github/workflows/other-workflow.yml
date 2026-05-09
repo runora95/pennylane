@@ -1,0 +1,27 @@
+name: Check event_name reference
+
+on:
+  schedule:
+    - cron: '5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  say_hello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Greet
+        run: |
+          echo "Hello world!"
+
+  say_hello1:
+    needs: say_hello
+    runs-on: ubuntu-latest
+    steps:
+      - name: Greet
+        run: |
+          echo "Hello world 2!"
+          echo "event name is ${{ github.event_name }}"
+
+  trigger_other:
+    needs: say_hello1
+    uses: ./.github/workflows/test-act.yml
